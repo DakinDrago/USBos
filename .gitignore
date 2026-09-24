@@ -1,9 +1,6 @@
 # USBos — jamais committé (données perso, générés locaux, piloté par les outils).
 # Miroir des exclusions de make_installer.py / tools/gen_files_json.py.
 
-# Copie live de clé USB (données personnelles + installeur périmé).
-applicationNo1/
-
 # Données de dev jamais embarquées ni publiées (cf. make_installer.py).
 USBos/data/
 # Tampon de l'updater (staging/backup/journal) — vit sur les clés.
