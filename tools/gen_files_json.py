@@ -103,6 +103,31 @@ def main(argv: list) -> int:
         print(f"Erreur : version invalide (semver x.y.z attendu) : {version}")
         return 1
 
+    # Écritures AVANT hachage : version.json + manifest.json sont mutés ici,
+    # donc leurs hash doivent être calculés après (sinon files.json fige
+    # l'ancien contenu et l'updater refuse la bascule pour "Bad hash").
+    if is_kernel:
+        schema = 1
+        try:
+            exist = json.loads(version_path.read_text(encoding="utf-8"))
+            if isinstance(exist.get("schema"), int):
+                schema = exist["schema"]
+        except (OSError, ValueError):
+            pass
+        atomic_write(version_path, dump_canonical({"kernel": version, "schema": schema, "version": version}))
+    else:
+        atomic_write(version_path, dump_canonical({"version": version}))
+        # Synchronise manifest.json (affiché dans la sidebar).
+        manifest = comp / "manifest.json"
+        try:
+            m = json.loads(manifest.read_text(encoding="utf-8"))
+            if m.get("version") != version:
+                m["version"] = version
+                atomic_write(manifest, dump_canonical(m))
+                print(f"manifest.json synchronisé à {version}.")
+        except (OSError, ValueError) as err:
+            print(f"Avertissement : manifest.json non synchronisé ({err}).")
+
     files = {}
     for p in sorted(comp.rglob("*")):
         if p.is_symlink():
@@ -131,27 +156,6 @@ def main(argv: list) -> int:
             return 1
         files[rel] = sha256_file(p)
 
-    if is_kernel:
-        schema = 1
-        try:
-            exist = json.loads(version_path.read_text(encoding="utf-8"))
-            if isinstance(exist.get("schema"), int):
-                schema = exist["schema"]
-        except (OSError, ValueError):
-            pass
-        atomic_write(version_path, dump_canonical({"kernel": version, "schema": schema, "version": version}))
-    else:
-        atomic_write(version_path, dump_canonical({"version": version}))
-        # Synchronise manifest.json (affiché dans la sidebar).
-        manifest = comp / "manifest.json"
-        try:
-            m = json.loads(manifest.read_text(encoding="utf-8"))
-            if m.get("version") != version:
-                m["version"] = version
-                atomic_write(manifest, dump_canonical(m))
-                print(f"manifest.json synchronisé à {version}.")
-        except (OSError, ValueError) as err:
-            print(f"Avertissement : manifest.json non synchronisé ({err}).")
     atomic_write(comp / "files.json", dump_canonical({"version": version, "files": files}))
     print(f"{comp} : version {version}, {len(files)} fichier(s) hachés -> files.json.")
     return 0
