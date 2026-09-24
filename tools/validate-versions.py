@@ -13,6 +13,7 @@ Règles :
   app-sync         apps/<id>/manifest.json["version"] == apps/<id>/version.json["version"]
   semver           chaque version lue est au format x.y.z
 """
+import hashlib
 import json
 import pathlib
 import re
@@ -76,6 +77,7 @@ def main() -> int:
     app_dirs = sorted(p for p in APPS_DIR.iterdir() if p.is_dir()) if APPS_DIR.is_dir() else []
     check("apps-found", bool(app_dirs),
           f"{len(app_dirs)} app(s)" if app_dirs else "aucune app trouvée")
+    app_versions = {}
     for app in app_dirs:
         try:
             manifest_v = json.loads((app / "manifest.json").read_text(encoding="utf-8")).get("version")
@@ -91,6 +93,54 @@ def main() -> int:
         check("app-sync", ok,
               f"{app.name} : manifest={manifest_v} vs version.json={file_v}"
               if not ok else f"{app.name}={manifest_v}")
+        if ok:
+            app_versions[app.name] = file_v
+
+    # Descripteurs de mise à jour : chaque files.json doit refléter l'arbre
+    # réel, sinon l'updater refuse la bascule pour "Bad hash" (staging
+    # vérifié avant écriture). L'updater exige aussi files.json["version"]
+    # == version.json["version"].
+    def check_descriptors(label, comp_dir, expect_version):
+        fj_path = comp_dir / "files.json"
+        try:
+            fj = json.loads(fj_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as err:
+            check("descriptors-present", False, f"{label} : files.json illisible ({err})")
+            return
+        entries = fj.get("files")
+        if not isinstance(entries, dict) or not entries:
+            check("descriptors-present", False, f"{label} : files.json sans entrée")
+            return
+        check("descriptors-present", True, f"{label} : {len(entries)} entrée(s)")
+        if fj.get("version") != expect_version:
+            check("descriptors-version", False,
+                  f"{label} : files.json={fj.get('version')} vs version={expect_version}")
+        else:
+            check("descriptors-version", True, f"{label}={expect_version}")
+        bad = []
+        for rel, recorded in entries.items():
+            if ".." in rel or rel.startswith("/") or not isinstance(recorded, str):
+                bad.append(f"{rel} (chemin)")
+                continue
+            try:
+                actual = hashlib.sha256((comp_dir / rel).read_bytes()).hexdigest()
+            except OSError:
+                bad.append(f"{rel} (absent)")
+                continue
+            if actual != str(recorded).lower():
+                bad.append(rel)
+        check("descriptors-fresh", not bad,
+              f"{label} : {len(bad)} hash périmé(s) : {bad[:5]}" if bad else f"{label} : {len(entries)} hash OK")
+
+    try:
+        sys_vj = json.loads(KERNEL_VERSION_JSON.read_text(encoding="utf-8"))
+        sys_expect = sys_vj.get("version") or kernel_v
+    except (OSError, ValueError):
+        sys_expect = kernel_v
+    check_descriptors("system", ROOT / "USBos" / "system", sys_expect)
+    for app in app_dirs:
+        if app.name in app_versions:
+            check_descriptors(f"apps/{app.name}", app, app_versions[app.name])
 
     fails = [r for r in results if r[0] == "FAIL"]
     for level, rule, detail in results:

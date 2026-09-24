@@ -85,9 +85,12 @@ requise à l'exécution — tout se passe dans le navigateur.
       si la date Composition est ancienne, régénérer avant d'installer.
 
     **Release** : bumper `KERNEL_VERSION` (`x.y.z`), puis
-    `python tools/validate-versions.py` (12 checks, 0 FAIL exigé) puis
+    `python tools/validate-versions.py` (checks, 0 FAIL exigé) puis
     `python make_installer.py` (sync + payload + meta). Ne jamais éditer
     `installer.html` à la main.
+    Ordre impératif : `gen_files_json` **en dernier**, juste avant commit —
+    tout edit de source après un `gen` invalide ses hash et fait refuser
+    la bascule aux clés (« Bad hash »).
 
     **Dépannage « il manque des options »** (Réglages incomplets, pas
     d'erreur rouge en console) :

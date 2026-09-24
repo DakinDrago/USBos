@@ -7,7 +7,7 @@
  */
 'use strict';
 
-const KERNEL_VERSION = '2.3.0';
+const KERNEL_VERSION = '2.3.1';
 const DB_NAME = 'usbos-kernel';
 const DB_STORE = 'handles';
 const DB_KEY = 'root';
@@ -2237,20 +2237,55 @@ async function checkForUpdates() {
   }
 }
 
+function isIntegrityFailure(err) {
+  return /integrity failure|bad hash/i.test(String((err && err.message) || err || ''));
+}
+
+async function doApplyPlan(plan) {
+  log('Mise à jour en cours…');
+  const result = await window.USBosUpdater.apply(state.vfs, plan);
+  log('Mise à jour terminée.');
+  clearUpdateBanner();
+  if (result.kernelChanged) {
+    log('Redémarrage requis (noyau modifié).');
+    window.location.reload();
+  } else {
+    await loadInstalledApps();
+    renderDesktop();
+  }
+  return result;
+}
+
 async function applyUpdatePlan(plan) {
   try {
-    log('Mise à jour en cours…');
-    const result = await window.USBosUpdater.apply(state.vfs, plan);
-    log('Mise à jour terminée.');
-    clearUpdateBanner();
-    if (result.kernelChanged) {
-      log('Redémarrage requis (noyau modifié).');
-      window.location.reload();
-    } else {
-      await loadInstalledApps();
-      renderDesktop();
+    // Le plan du bandeau peut être périmé (descripteurs republiés entre la
+    // vérification et le clic) : toujours repartir d'un plan frais.
+    let usePlan = plan;
+    try {
+      const fresh = await checkForUpdates();
+      if (fresh && fresh.hasUpdates) {
+        usePlan = fresh;
+      } else if (fresh && !fresh.hasUpdates) {
+        log('Déjà à jour (revérifié avant application).');
+        return { kernelChanged: false, alreadyUpToDate: true };
+      }
+      // fresh null (hors-ligne) : on tente avec le plan du bandeau,
+      // l'échec réseau remontera une erreur claire.
+    } catch { /* on tente avec le plan du bandeau */ }
+    try {
+      return await doApplyPlan(usePlan);
+    } catch (err) {
+      if (!isIntegrityFailure(err)) throw err;
+      // Mélange transitoire possible (CDN entre deux générations de
+      // descripteurs) : UN seul nouvel essai sur plan refait à neuf.
+      // La vérification SHA-256 s'applique à chaque essai : aucun
+      // affaiblissement d'intégrité.
+      log('Intégrité refusée, nouvelle vérification avant nouvel essai…');
+      await new Promise((r) => setTimeout(r, 5000));
+      const retry = await checkForUpdates();
+      if (retry && retry.hasUpdates) return await doApplyPlan(retry);
+      throw err;
     }
-    return result;
   } catch (err) {
     log(`Mise à jour impossible : ${err && err.message}`, 'e');
     try { toast(t('shell.settings.exportFailed', { error: err && err.message })); } catch { /* noop */ }
