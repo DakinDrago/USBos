@@ -1,0 +1,8 @@
+{
+  "id": "my-app",
+  "name": "My App",
+  "version": "0.1.0",
+  "entry": "index.js",
+  "description": "TODO: one-line description.",
+  "icon": "📦"
+}

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- 'unsafe-eval' est requis : le noyau exécute le code des apps via
+     new Function() dans l'iframe srcdoc (hérite de cette CSP). C'est le
+     fonctionnement normal — écrire dans apps/ = exécuter du code de toute
+     façon. La vraie isolation est ailleurs : sandbox sans allow-same-origin
+     + pont RPC scopé à data:<id>.
+     connect-src épinglé : raw.githubusercontent.com (updater delta) +
+     PeerJS cloud (app Mesh, `new Peer()` sans host -> 0.peerjs.com :
+     HTTPS pour l'API + WSS pour la signalisation). Toute autre destination
+     réseau est refusée.
+     frame-src self+blob : srcdoc opaque OK Chrome ; à tester Firefox/Safari. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; connect-src 'self' https://raw.githubusercontent.com https://*.peerjs.com wss://*.peerjs.com blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'">
+<title>USBos</title>
+<!-- Indice langue précoce (même source que le bootstrap kernel : localStorage
+     usbos-lang-hint, défaut fr fixe, jamais la langue du navigateur).
+     Inline autorisé par script-src 'unsafe-inline'. -->
+<script>try{document.documentElement.lang=localStorage.getItem('usbos-lang-hint')==='en'?'en':'fr'}catch(e){}</script>
+<!-- ?v= anti-cache : identique à KERNEL_VERSION (system/kernel.js). À bumper
+     à chaque release, sinon le navigateur peut exécuter d'anciens scripts
+     après une réinstallation (options manquantes sans aucune erreur). -->
+<link rel="stylesheet" href="system/kernel.css?v=2.3.0">
+</head>
+<body>
+<noscript><p style="padding:2em;text-align:center">USBos nécessite JavaScript. / USBos requires JavaScript.</p></noscript>
+<!-- Aucune logique ici : le noyau prend le relais et affiche
+     directement l'écran d'allumage ou le bureau. -->
+<script src="system/vfs.js?v=2.3.0"></script>
+<script src="system/crypto.js?v=2.3.0"></script>
+<script src="system/logbus.js?v=2.3.0"></script>
+<script src="system/updater.js?v=2.3.0"></script>
+<script src="system/kernel.js?v=2.3.0"></script>
+<script src="system/console.js?v=2.3.0"></script>
+</body>
+</html>

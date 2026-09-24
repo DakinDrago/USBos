@@ -1,0 +1,8 @@
+{
+  "id": "notes",
+  "name": "Notes",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "description": "Bloc-notes persistant sur la clé.",
+  "icon": "📝"
+}

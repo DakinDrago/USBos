@@ -1,0 +1,8 @@
+{
+  "id": "markdown",
+  "name": "Markdown",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "description": "Éditeur de documents Markdown avec aperçu, persisté sur la clé.",
+  "icon": "📄"
+}

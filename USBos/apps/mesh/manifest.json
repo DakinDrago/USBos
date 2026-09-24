@@ -1,0 +1,9 @@
+{
+  "id": "mesh",
+  "name": "Mesh",
+  "version": "1.2.0",
+  "entry": "index.js",
+  "description": "Discussion et transfert de fichiers directs entre clés USBos, en WebRTC (signalisation publique PeerJS). Pas de QR : connexion par code, avec confirmation manuelle des connexions entrantes.",
+  "_sandbox_note": "Sandbox blanchi par le noyau (allow-scripts allow-forms allow-modals allow-downloads, allow-popups). allow-same-origin est interdit car il donnerait a cette app la meme origine que le noyau (perte d'isolation).",
+  "icon": "📡"
+}

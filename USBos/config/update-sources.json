@@ -1,0 +1,5 @@
+{
+  "_comment": "Remplacez <votre-compte> par votre compte GitHub. Un dépôt public par composant. Laissez vide ({}) pour désactiver une mise à jour tant qu'un dépôt n'existe pas.",
+  "kernel": "",
+  "apps": {}
+}

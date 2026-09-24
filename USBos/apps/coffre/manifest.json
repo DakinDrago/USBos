@@ -1,0 +1,8 @@
+{
+  "id": "coffre",
+  "name": "Coffre",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "description": "Coffre-fort d'identifiants, chiffré AES-GCM par l'app elle-même (le kernel ne voit jamais la passphrase).",
+  "icon": "🔒"
+}

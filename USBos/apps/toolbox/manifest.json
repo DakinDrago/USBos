@@ -1,0 +1,8 @@
+{
+  "id": "toolbox",
+  "name": "Boîte à outils",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "description": "Générateur de mots de passe, SHA-256, Base64, convertisseurs — 100% local.",
+  "icon": "🧰"
+}

@@ -1,0 +1,8 @@
+{
+  "id": "agenda",
+  "name": "Agenda",
+  "version": "2.0.0",
+  "entry": "index.js",
+  "description": "Calendrier (mois/semaine/jour), import/export iCalendar (.ics).",
+  "icon": "📅"
+}

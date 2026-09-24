@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Installer USBos</title>
+<style>
+:root{--bg:#0d1117;--panel:#161b22;--panel2:#1c2330;--border:#2b3442;--text:#e6edf3;--muted:#8b98a9;--accent:#4f8cff;--accent2:#7c5cff;--ok:#3fb950;--err:#f85149;--warn:#d29922}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center}
+.card{max-width:600px;width:100%;background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:32px;margin:20px}
+.langrow{display:flex;gap:6px;justify-content:flex-end;margin-bottom:10px}
+.langrow button{width:auto;padding:4px 10px;font-size:12px;background:var(--panel2);border:1px solid var(--border);border-radius:7px;color:var(--muted);font-weight:600}
+.langrow button.on{color:#fff;border-color:var(--accent)}
+h1{font-size:20px;margin-bottom:6px}
+p{color:var(--muted);font-size:13px;margin-bottom:14px}
+.meta{color:var(--muted);font-size:12px;margin:-8px 0 14px;font-family:'JetBrains Mono',ui-monospace,monospace}
+button{font:inherit;cursor:pointer;background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;border-radius:10px;color:#fff;font-weight:600;padding:11px 18px;width:100%}
+button:disabled{opacity:.5;cursor:not-allowed}
+button.ghost{background:var(--panel2);border:1px solid var(--border)}
+.modes{display:none;flex-direction:column;gap:8px;margin:6px 0 14px}
+.modes.show{display:flex}
+.mode{display:flex;gap:10px;align-items:flex-start;background:var(--panel2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;cursor:pointer}
+.mode.sel{border-color:var(--accent)}
+.mode.disabled{opacity:.45;cursor:not-allowed}
+.mode input{width:auto;margin-top:3px;accent-color:var(--accent)}
+.mode .t{font-weight:600;font-size:13.5px}
+.mode .d{color:var(--muted);font-size:12px}
+.mode.danger .t{color:var(--err)}
+.danger-check{display:none;gap:8px;align-items:flex-start;background:rgba(248,81,73,.08);border:1px solid var(--err);border-radius:10px;padding:10px 12px;font-size:13px;margin-bottom:14px}
+.danger-check.show{display:flex}
+.danger-check input{width:auto;margin-top:3px;accent-color:var(--err)}
+.log{margin-top:16px;background:#0a0d12;border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;max-height:220px;overflow-y:auto;color:#9fb0c3}
+.log .l{padding:1px 0}
+.log .ok{color:var(--ok)}
+.log .err{color:var(--err)}
+.log .warn{color:var(--warn)}
+.done{margin-top:16px;padding:14px;border:1px solid var(--ok);border-radius:10px;color:var(--ok);font-size:13px;display:none}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="langrow"><button id="lang-fr" type="button">FR</button><button id="lang-en" type="button">EN</button></div>
+  <h1 id="t-title">Installer USBos</h1>
+  <p id="t-intro"></p>
+  <div class="meta" id="meta"></div>
+  <button id="go"></button>
+  <div class="modes" id="modes">
+    <label class="mode danger" id="mode-zero-lbl">
+      <input type="radio" name="mode" value="zero">
+      <span><span class="t" id="t-zero-t"></span><br><span class="d" id="t-zero-d"></span></span>
+    </label>
+    <label class="mode" id="mode-full-lbl">
+      <input type="radio" name="mode" value="full" checked>
+      <span><span class="t" id="t-full-t"></span><br><span class="d" id="t-full-d"></span></span>
+    </label>
+    <label class="mode" id="mode-diff-lbl">
+      <input type="radio" name="mode" value="diff">
+      <span><span class="t" id="t-diff-t"></span><br><span class="d" id="t-diff-d"></span></span>
+    </label>
+  </div>
+  <label class="danger-check" id="danger-check"><input type="checkbox" id="danger-ok"><span id="t-danger"></span></label>
+  <button id="apply" style="display:none"></button>
+  <div class="log" id="log"></div>
+  <div class="done" id="done"></div>
+</div>
+<script>
+const PAYLOAD = __USBOS_PAYLOAD__;
+// Dictionnaire inline FR/EN (défaut FR fixe). L'installeur est autonome :
+// pas d'accès aux JSON system/lang (pas encore installés).
+const STR = {
+  fr: {
+    title: 'Installer USBos',
+    intro: "Choisissez l'emplacement (clé USB ou dossier) où installer USBos. Deux dossiers y seront créés : <b>USBos/</b> (système, apps, données) et <b>Partage/</b> (espace d'échange en clair, lisible hors USBos). Choisissez ensuite comment installer :",
+    go: "1. Choisir l'emplacement",
+    meta: (v, d, h) => `Contenu : noyau ${v} — construit le ${d} (${h})`,
+    zeroT: 'Réinstaller à zéro',
+    zeroD: "Rase <b>USBos/</b> (données et config actuelles <b>détruites</b>) puis réinstalle. <b>Partage/</b> survit toujours. Seul mode qui nettoie les fichiers orphelins.",
+    fullT: 'Tout mettre à jour (recommandé)',
+    fullD: "<b>data/</b> préservé, <b>config/</b> fusionnée (vos fichiers gardés, nouveautés ajoutées).",
+    diffT: 'Différence seulement',
+    diffD: "N'écrit que les fichiers nouveaux ou modifiés (comparaison SHA-256). Le plus rapide ; config existante toujours gardée.",
+    danger: 'Je comprends que <b>toutes les données et la configuration actuelles seront définitivement effacées</b>.',
+    apply: '2. Appliquer',
+    applyZero: '2. TOUT EFFACER et réinstaller',
+    applyZeroFresh: '2. Installer à neuf',
+    applyFull: '2. Tout mettre à jour',
+    applyDiff: '2. Installer la différence',
+    done: 'Installation terminée. Ouvrez <b>USBos/index.html</b> dans votre navigateur pour démarrer.',
+    noFS: 'File System Access API indisponible dans ce navigateur.',
+    detected: (n) => `Dossier USBos détecté dans « ${n} » — choisissez un mode ci-dessous.`,
+    fresh: (n) => `Nouvelle installation dans « ${n} »/USBos.`,
+    cancelled: (m) => 'Sélection annulée ou refusée : ' + m,
+    chooseFirst: "Choisissez d'abord un emplacement.",
+    checkDestruction: 'Cochez la confirmation de destruction pour réinstaller à zéro.',
+    notInstall: "Le dossier USBos ne ressemble pas à une installation (ni system/ ni apps/) — suppression refusée par sécurité. Supprimez-le à la main.",
+    removing: 'Suppression de l’installation existante…',
+    removed: 'Ancienne installation effacée.',
+    partageReady: 'Dossier Partage/ prêt (espace d’échange, jamais effacé).',
+    analyzing: 'Analyse de la clé (comparaison SHA-256)…',
+    analyzed: (n, total) => `… ${n}/${total} analysé(s)`,
+    failOn: (p, m) => `Échec sur ${p} : ${m}`,
+    written: (w, total) => `… ${w}/${total} fichier(s) écrits`,
+    sumZero: 'réinstallation à zéro',
+    sumFresh: 'installation neuve',
+    sumFull: 'mise à jour complète',
+    sumDiff: 'différence',
+    sumWrote: (w) => `${w} écrit(s)`,
+    sumFailed: (f) => `${f} échec(s) — relancez le même mode pour reprendre`,
+    sumAdded: (a) => `${a} ajouté(s)`,
+    sumUpdated: (u) => `${u} modifié(s)`,
+    sumIdentical: (i) => `${i} identique(s) ignoré(s)`,
+    sumConfig: (k) => `${k} config(s) gardée(s)`,
+    finished: (parts) => `Terminé (${parts}).`,
+    tip: 'Astuce : des fichiers config ont changé côté installeur mais les vôtres ont été gardés.',
+    error: (m) => 'Erreur : ' + m,
+  },
+  en: {
+    title: 'USBos Installer',
+    intro: 'Choose the location (USB key or folder) where USBos will be installed. Two folders will be created there: <b>USBos/</b> (system, apps, data) and <b>Partage/</b> (shown as Shared/, plaintext exchange space, readable outside USBos). Then choose how to install:',
+    go: '1. Choose location',
+    meta: (v, d, h) => `Content: kernel ${v} — built ${d} (${h})`,
+    zeroT: 'Reinstall from zero',
+    zeroD: 'Wipes <b>USBos/</b> (current data and config <b>destroyed</b>) then reinstalls. <b>Partage/</b> always survives. Only mode that cleans orphan files.',
+    fullT: 'Update everything (recommended)',
+    fullD: '<b>data/</b> preserved, <b>config/</b> merged (your files kept, new ones added).',
+    diffT: 'Difference only',
+    diffD: 'Writes only new or modified files (SHA-256 comparison). Fastest; existing config always kept.',
+    danger: 'I understand that <b>all current data and configuration will be permanently erased</b>.',
+    apply: '2. Apply',
+    applyZero: '2. WIPE and reinstall',
+    applyZeroFresh: '2. Fresh install',
+    applyFull: '2. Update everything',
+    applyDiff: '2. Install the difference',
+    done: 'Installation done. Open <b>USBos/index.html</b> in your browser to start.',
+    noFS: 'File System Access API unavailable in this browser.',
+    detected: (n) => `USBos folder detected in “${n}” — choose a mode below.`,
+    fresh: (n) => `Fresh install in “${n}”/USBos.`,
+    cancelled: (m) => 'Selection cancelled or refused: ' + m,
+    chooseFirst: 'Choose a location first.',
+    checkDestruction: 'Check the destruction confirmation to reinstall from zero.',
+    notInstall: 'The USBos folder does not look like an installation (neither system/ nor apps/) — deletion refused for safety. Delete it manually.',
+    removing: 'Removing the existing installation…',
+    removed: 'Old installation wiped.',
+    partageReady: 'Partage/ folder ready (shown as Shared/, exchange space, never wiped).',
+    analyzing: 'Analyzing the key (SHA-256 comparison)…',
+    analyzed: (n, total) => `… ${n}/${total} analyzed`,
+    failOn: (p, m) => `Failed on ${p}: ${m}`,
+    written: (w, total) => `… ${w}/${total} file(s) written`,
+    sumZero: 'zero reinstall',
+    sumFresh: 'fresh install',
+    sumFull: 'full update',
+    sumDiff: 'difference',
+    sumWrote: (w) => `${w} written`,
+    sumFailed: (f) => `${f} failed — rerun the same mode to resume`,
+    sumAdded: (a) => `${a} added`,
+    sumUpdated: (u) => `${u} modified`,
+    sumIdentical: (i) => `${i} identical skipped`,
+    sumConfig: (k) => `${k} config(s) kept`,
+    finished: (parts) => `Done (${parts}).`,
+    tip: 'Tip: some config files changed on the installer side but yours were kept.',
+    error: (m) => 'Error: ' + m,
+  },
+};
+let lang = 'fr';
+const s = (k) => STR[lang][k];
+// innerHTML réservé aux STR statiques ci-dessus, jamais aux données user
+// (nom de dossier, messages d'erreur FS) : log() passe par textContent.
+function renderStatic() {
+  document.documentElement.lang = lang;
+  document.title = s('title');
+  document.getElementById('t-title').textContent = s('title');
+  document.getElementById('t-intro').innerHTML = s('intro');
+  const metaEl = document.getElementById('meta');
+  const pm = (typeof PAYLOAD !== 'undefined' && PAYLOAD && PAYLOAD.meta) || null;
+  if (pm && pm.kernelVersion) {
+    metaEl.style.display = 'block';
+    metaEl.textContent = s('meta')(pm.kernelVersion, pm.builtAt || '?', (pm.treeHash || '').slice(0, 12));
+  } else {
+    metaEl.style.display = 'none'; // vieux payload sans meta : rien à afficher
+  }
+  goBtn.textContent = s('go');
+  document.getElementById('t-zero-t').textContent = s('zeroT');
+  document.getElementById('t-zero-d').innerHTML = s('zeroD');
+  document.getElementById('t-full-t').textContent = s('fullT');
+  document.getElementById('t-full-d').innerHTML = s('fullD');
+  document.getElementById('t-diff-t').textContent = s('diffT');
+  document.getElementById('t-diff-d').innerHTML = s('diffD');
+  document.getElementById('t-danger').innerHTML = s('danger');
+  doneEl.innerHTML = s('done');
+  document.getElementById('lang-fr').classList.toggle('on', lang === 'fr');
+  document.getElementById('lang-en').classList.toggle('on', lang === 'en');
+  refreshModeUI();
+}
+document.getElementById('lang-fr').onclick = () => { lang = 'fr'; renderStatic(); };
+document.getElementById('lang-en').onclick = () => { lang = 'en'; renderStatic(); };
+const logEl = document.getElementById('log');
+const goBtn = document.getElementById('go');
+const applyBtn = document.getElementById('apply');
+const doneEl = document.getElementById('done');
+const modesEl = document.getElementById('modes');
+const dangerCheck = document.getElementById('danger-check');
+const dangerOk = document.getElementById('danger-ok');
+let pickedParent = null;
+let installExists = false;
+
+function log(msg, cls) {
+  const l = document.createElement('div');
+  l.className = 'l' + (cls ? ' ' + cls : '');
+  l.textContent = msg;
+  logEl.append(l);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+/**
+ * Décision d'installation PURE (testable sans DOM ni FS) :
+ * entries = [relPath], hashes = {relPath: sha256}, mode parmi
+ * 'zero' | 'full' | 'diff', local = {relPath: sha256|null si absent}.
+ * Retourne [{ relPath, action }] où action vaut :
+ * 'write' (dont 'write' en zero = réinstallation),
+ * 'added' (diff : absent de la clé), 'updated' (diff : hash différent),
+ * 'identical' (diff : inchangé), 'skip-data' (jamais touché),
+ * 'skip-config' (config existante gardée).
+ */
+function planInstall(entries, hashes, mode, local) {
+  // Dossiers préservés lus du payload (défaut data+config, cf. make_installer.py
+  // PRESERVE_ON_UPDATE) : jamais écrasés en full/diff. La distinction
+  // skip-data vs skip-config est gardée (comptes et tip config distincts).
+  const PRESERVE = new Set(PAYLOAD.preserveOnUpdate || ['data', 'config']);
+  const out = [];
+  for (const relPath of entries) {
+    const topDir = relPath.split('/')[0];
+    // Zéro/frais : le dossier vient d'être (re)créé vide, tout s'écrit.
+    if (mode === 'zero' || mode === 'fresh') { out.push({ relPath, action: 'write' }); continue; }
+    // Les autres modes ne touchent jamais aux données utilisateur.
+    if (topDir === 'data') { out.push({ relPath, action: 'skip-data' }); continue; }
+    if (mode === 'full') {
+      if (PRESERVE.has('config') && topDir === 'config' && local[relPath] != null) { out.push({ relPath, action: 'skip-config' }); continue; }
+      out.push({ relPath, action: topDir === 'config' ? 'added' : 'write' });
+      continue;
+    }
+    // mode 'diff'
+    if (local[relPath] == null) { out.push({ relPath, action: 'added' }); continue; }
+    if (local[relPath] !== (hashes[relPath] || '').toLowerCase()) {
+      if (PRESERVE.has('config') && topDir === 'config') { out.push({ relPath, action: 'skip-config' }); continue; }
+      out.push({ relPath, action: 'updated' });
+      continue;
+    }
+    out.push({ relPath, action: 'identical' });
+  }
+  return out;
+}
+
+function b64ToBuffer(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+
+async function sha256Hex(buffer) {
+  const digest = await crypto.subtle.digest('SHA-256', buffer);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function fileExists(dirHandle, relPath) {
+  const parts = relPath.split('/');
+  let dir = dirHandle;
+  try {
+    for (let i = 0; i < parts.length - 1; i++) {
+      dir = await dir.getDirectoryHandle(parts[i]);
+    }
+    await dir.getFileHandle(parts[parts.length - 1]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readLocalHash(dirHandle, relPath) {
+  try {
+    const parts = relPath.split('/');
+    let dir = dirHandle;
+    for (let i = 0; i < parts.length - 1; i++) {
+      dir = await dir.getDirectoryHandle(parts[i]);
+    }
+    const fh = await dir.getFileHandle(parts[parts.length - 1]);
+    const buf = await (await fh.getFile()).arrayBuffer();
+    return sha256Hex(buf);
+  } catch {
+    return null; // absent ou illisible -> traité comme à installer
+  }
+}
+
+async function writeFile(dirHandle, relPath, buffer) {
+  // Garde anti-traversée : le payload est généré par make_installer.py
+  // (chemins relatifs simples), tout chemin suspect est refusé.
+  if (relPath.includes('..') || relPath.startsWith('/') || relPath.includes('\\') || relPath.includes(':')) {
+    throw new Error('Chemin refusé : ' + relPath);
+  }
+  const parts = relPath.split('/');
+  let dir = dirHandle;
+  for (let i = 0; i < parts.length - 1; i++) {
+    dir = await dir.getDirectoryHandle(parts[i], { create: true });
+  }
+  const fh = await dir.getFileHandle(parts[parts.length - 1], { create: true });
+  const w = await fh.createWritable();
+  try {
+    await w.write(buffer);
+    await w.close();
+  } catch (err) {
+    try { await w.abort(); } catch { /* noop */ }
+    throw new Error(`${relPath} : ${err.message}`);
+  }
+}
+
+async function dirExists(parent, name) {
+  try { await parent.getDirectoryHandle(name); return true; } catch { return false; }
+}
+
+/** Garde du mode zéro : ne rase que ce qui ressemble à une install USBos
+ *  (system/kernel.js présent, ou apps/ non-vide). */
+async function looksLikeInstall(dirHandle) {
+  try {
+    const sys = await dirHandle.getDirectoryHandle('system');
+    try { await sys.getFileHandle('kernel.js'); return true; } catch { /* noop */ }
+  } catch { /* noop */ }
+  try {
+    const apps = await dirHandle.getDirectoryHandle('apps');
+    for await (const _entry of apps.entries()) return true; // au moins 1 entrée
+    return false;
+  } catch { return false; }
+}
+
+function selectedMode() {
+  const r = document.querySelector('input[name="mode"]:checked');
+  return r ? r.value : 'full';
+}
+
+function refreshModeUI() {
+  const mode = selectedMode();
+  for (const v of ['zero', 'full', 'diff']) {
+    document.getElementById(`mode-${v}-lbl`).classList.toggle('sel', v === mode);
+  }
+  dangerCheck.classList.toggle('show', mode === 'zero' && installExists);
+  applyBtn.textContent = mode === 'zero' && installExists
+    ? s('applyZero')
+    : mode === 'zero' ? s('applyZeroFresh') : mode === 'full' ? s('applyFull') : s('applyDiff');
+}
+renderStatic();
+for (const r of document.querySelectorAll('input[name="mode"]')) {
+  r.addEventListener('change', refreshModeUI);
+}
+
+goBtn.onclick = async () => {
+  if (typeof window.showDirectoryPicker !== 'function') {
+    log(s('noFS'), 'err');
+    return;
+  }
+  try {
+    pickedParent = await window.showDirectoryPicker({ mode: 'readwrite' });
+    dangerOk.checked = false; // reset confirmation destruction à chaque nouvel emplacement
+    installExists = await dirExists(pickedParent, 'USBos');
+    log(installExists ? s('detected')(pickedParent.name) : s('fresh')(pickedParent.name));
+    modesEl.classList.add('show');
+    applyBtn.style.display = 'block';
+    // Sans install existante, seuls zéro (= neuf) a du sens : full/diff désactivés.
+    for (const v of ['full', 'diff']) {
+      const radio = document.querySelector(`input[name="mode"][value="${v}"]`);
+      radio.disabled = !installExists;
+      document.getElementById(`mode-${v}-lbl`).classList.toggle('disabled', !installExists);
+    }
+    if (!installExists) {
+      document.querySelector('input[name="mode"][value="zero"]').checked = true;
+    }
+    refreshModeUI();
+  } catch (err) {
+    log(s('cancelled')(err.message), 'err');
+  }
+};
+
+applyBtn.onclick = async () => {
+  if (!pickedParent) { log(s('chooseFirst'), 'err'); return; }
+  const mode = installExists ? selectedMode() : 'fresh';
+  if (mode === 'zero' && installExists && !dangerOk.checked) {
+    log(s('checkDestruction'), 'err');
+    return;
+  }
+  applyBtn.disabled = true;
+  goBtn.disabled = true;
+  try {
+    let usbos;
+    if (mode === 'zero' && installExists) {
+      const current = await pickedParent.getDirectoryHandle('USBos');
+      if (!(await looksLikeInstall(current))) {
+        log(s('notInstall'), 'err');
+        return;
+      }
+      log(s('removing'), 'warn');
+      await pickedParent.removeEntry('USBos', { recursive: true });
+      log(s('removed'));
+    }
+    usbos = await pickedParent.getDirectoryHandle('USBos', { create: true });
+    // Espace d'échange hors USBos (jamais effacé, même en mode zéro).
+    await pickedParent.getDirectoryHandle('Partage', { create: true });
+    log(s('partageReady'));
+
+    const entries = Object.keys(PAYLOAD.files);
+    let plan;
+    if (mode === 'fresh' || mode === 'zero') {
+      plan = planInstall(entries, PAYLOAD.hashes || {}, installExists ? 'zero' : 'fresh', {});
+    } else {
+      log(s('analyzing'));
+      const local = {};
+      let n = 0;
+      for (const relPath of entries) {
+        local[relPath] = await readLocalHash(usbos, relPath);
+        n++;
+        if (n % 5 === 0) log(s('analyzed')(n, entries.length));
+      }
+      plan = planInstall(entries, PAYLOAD.hashes || {}, mode, local);
+    }
+
+    let written = 0, failed = 0, added = 0, updated = 0, identical = 0, skippedData = 0, keptConfig = 0;
+    const toWrite = plan.filter((p) => ['write', 'added', 'updated'].includes(p.action));
+    // Échec mi-parcours : on continue (compteur failed) au lieu de throw au
+    // 1er fichier — seul le wipe reste fatal (throw plus haut).
+    for (const item of toWrite) {
+      try {
+        await writeFile(usbos, item.relPath, b64ToBuffer(PAYLOAD.files[item.relPath]));
+      } catch (err) {
+        failed++;
+        log(s('failOn')(item.relPath, err.message), 'err');
+        continue;
+      }
+      written++;
+      if (item.action === 'added') added++;
+      else if (item.action === 'updated') updated++;
+      if ((written + failed) % 5 === 0) log(s('written')(written, toWrite.length));
+    }
+    for (const item of plan) {
+      if (item.action === 'identical') identical++;
+      else if (item.action === 'skip-data') skippedData++;
+      else if (item.action === 'skip-config') keptConfig++;
+    }
+    const parts = [];
+    if (mode === 'zero' && installExists) parts.push(s('sumZero'));
+    else if (mode === 'fresh') parts.push(s('sumFresh'));
+    else if (mode === 'full') parts.push(s('sumFull'));
+    else parts.push(s('sumDiff'));
+    parts.push(s('sumWrote')(written));
+    if (failed) parts.push(s('sumFailed')(failed));
+    if (added) parts.push(s('sumAdded')(added));
+    if (updated) parts.push(s('sumUpdated')(updated));
+    if (identical) parts.push(s('sumIdentical')(identical));
+    if (keptConfig) parts.push(s('sumConfig')(keptConfig));
+    log(s('finished')(parts.join(', ')), failed ? 'err' : 'ok');
+    if (failed > 0) log(s('error')(s('sumFailed')(failed)), 'err');
+    if (keptConfig) log(s('tip'), 'warn');
+    dangerOk.checked = false; // reset confirmation après chaque apply
+    doneEl.style.display = 'block';
+  } catch (err) {
+    log(s('error')(err.message), 'err');
+  } finally {
+    applyBtn.disabled = false;
+    goBtn.disabled = false;
+  }
+};
+</script>
+</body>
+</html>
