@@ -1,5 +1,12 @@
 {
-  "_comment": "Remplacez <votre-compte> par votre compte GitHub. Un dépôt public par composant. Laissez vide ({}) pour désactiver une mise à jour tant qu'un dépôt n'existe pas.",
-  "kernel": "",
-  "apps": {}
+  "_comment": "Monorepo GitHub : un sous-chemin raw par composant (noyau + 6 apps). Laisser vide ({}) pour désactiver un composant.",
+  "kernel": "https://raw.githubusercontent.com/DakinDrago/USBos/main/USBos/system",
+  "apps": {
+    "agenda": "https://raw.githubusercontent.com/DakinDrago/USBos/main/USBos/apps/agenda",
+    "coffre": "https://raw.githubusercontent.com/DakinDrago/USBos/main/USBos/apps/coffre",
+    "markdown": "https://raw.githubusercontent.com/DakinDrago/USBos/main/USBos/apps/markdown",
+    "mesh": "https://raw.githubusercontent.com/DakinDrago/USBos/main/USBos/apps/mesh",
+    "notes": "https://raw.githubusercontent.com/DakinDrago/USBos/main/USBos/apps/notes",
+    "toolbox": "https://raw.githubusercontent.com/DakinDrago/USBos/main/USBos/apps/toolbox"
+  }
 }

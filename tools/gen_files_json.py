@@ -66,7 +66,7 @@ def sha256_file(path: pathlib.Path) -> str:
 
 
 def main(argv: list) -> int:
-    if len(argv) < 2:
+    if len(argv) < 1:
         print(__doc__)
         return 2
     comp = pathlib.Path(argv[0])

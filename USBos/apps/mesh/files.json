@@ -1,0 +1,8 @@
+{
+  "files": {
+    "index.js": "b78f9475d4454ad197f3313732c831a0d2fa608a3bce0a03e001fa887ccb073a",
+    "manifest.json": "7eb84f0f2f8446f97792095325cbe7ed7ab47cd57149149c92f0a3276b201fa8",
+    "vendor/peerjs.min.js": "1ce72195e832168c32d8d6a060c1ba3cdb4531036ddaa0575568346cc867f29d"
+  },
+  "version": "1.2.0"
+}
