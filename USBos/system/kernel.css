@@ -333,6 +333,12 @@ footer { padding: 8px 18px; border-top: 1px solid var(--border); color: var(--mu
 .guest-size { color: var(--muted); font-size: 12px; font-family: var(--mono); min-width: 70px; text-align: right; }
 .guest-drop { border: 1.5px dashed var(--border); border-radius: 10px; padding: 14px; text-align: center; color: var(--muted); font-size: 12.5px; margin-top: 10px; }
 .guest-drop.drag { border-color: var(--accent); color: var(--accent); }
+.guest-row.media { cursor: pointer; }
+.guest-row.media:hover { border-color: var(--accent); }
+.guest-preview { position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,.85); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 20px; }
+.guest-preview img, .guest-preview video { max-width: min(92vw, 1100px); max-height: 76vh; border-radius: 10px; background: #000; }
+.guest-preview audio { width: min(92vw, 520px); }
+.guest-preview .cap { color: #fff; font-size: 13px; max-width: 92vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .btn.mini.del { border-color: var(--err); color: var(--err); }
 @media (max-width: 640px) {
   .dash-grid { grid-template-columns: 1fr; }

@@ -39,7 +39,7 @@ requise à l'exécution — tout se passe dans le navigateur.
 1. `python3 make_installer.py` régénère `installer.html` à partir du contenu
    réel de `USBos/`. Seuls `index.html`, `system/`, `apps/`,
    `config/update-sources.json` et `config/wallpaper-slides/*` (fonds
-   par défaut : vraies images vérifiées, 2 Mo/fichier, 10 max, 5 Mo
+   par défaut : vraies images vérifiées, 8 Mo/fichier, 10 max, 5 Mo
    total, installés à neuf et **jamais écrasés**) sont embarqués —
    **jamais `data/`** (données personnelles du poste de dev) ni
    `.update/`. Plafond total : 20 Mo bruts (alerte dès 75 %).
@@ -130,11 +130,11 @@ const USBosApp = {
   async mount(ctx, stage) {
     // ctx.fs.readJSON/writeJSON/readText/writeText/readBinary/writeBinary
     //   -> scopés automatiquement à data/<mon-app>/... (chemins ".." rejetés,
-    //      25 Mo max par écriture binaire, 2 Mo pour texte/JSON)
+    //      256 Mo max par écriture binaire, 2 Mo pour texte/JSON)
     // ctx.fs.readAppAsset(path) -> lecture seule de apps/<mon-app>/path (ex: vendor/lib.js)
     // ctx.fs.readShared/writeShared/readSharedText/writeSharedText/listShared/existsShared/removeShared(path, …)
     //   -> espace Partage/ COMMUN à toutes les apps, en clair par design (intérieur + extérieur) ;
-    //      mêmes validations et plafonds (25 Mo binaire / 2 Mo texte). Ne jamais y mettre de secrets.
+    //      mêmes validations et plafonds (256 Mo binaire / 2 Mo texte). Ne jamais y mettre de secrets.
     // ctx.ui.log(message, niveau?) -> niveau parmi debug/info/warn/error (défaut info), 2000 car. max
     // ctx.ui.toast(message) -> notification shell (200 car. max, anti-spam 1/2 s par app)
     // stage: élément DOM où monter l'UI
@@ -328,7 +328,7 @@ statut, Journal, palette, clé, Verrouiller, Réglages).
   en clair — visibles dès le verrou) : 6 dégradés prédéfinis + 5 scènes
   SVG intégrées (montagnes, vagues, dunes, boréale, soleil — zéro poids,
   offline) + **vos images** (JPG/PNG/WebP/GIF vérifiées par magic bytes,
-  2 Mo max, 10 max, import par fichier ou depuis `Partage/`).
+  8 Mo max, 10 max, réduites à 2048 px à l'import, import par fichier ou depuis `Partage/`).
   Diaporama presets et/ou images (15/30/60 s), opt-in par app.
   Vos JPG par défaut : déposez-les dans `config/wallpaper-slides/` des
   **sources** — embarqués par `make_installer.py` (5 Mo total max, jamais
@@ -336,7 +336,7 @@ statut, Journal, palette, clé, Verrouiller, Réglages).
 - **Espace invité** : gros bouton « 👤 Continuer en invité » sur
   l'écran de verrouillage (et dès l'écran d'allumage via « Explorer en
    invité… » : choisissez le dossier parent) — explorateur du seul
-   `Partage/` (fil d'Ariane, téléchargement, dépôt ≤ 25 Mo, dossiers,
+   `Partage/` (fil d'Ariane, téléchargement, dépôt ≤ 100 Mo, dossiers,
    suppression en 2 temps), **sans** déverrouillage et **sans** accès à
    `data:/apps:/system:/config:` (garanti par construction + testé).
    Sortie = retour à l'écran d'allumage. `Partage/` reste en clair par design.
@@ -368,8 +368,9 @@ communiquer (ex. `LAC-4821`), dans l'esprit LocalSend.
 
 Règles : toute connexion **entrante** doit être acceptée manuellement
 (expiration après 60 s) ; le code est une adresse, pas un secret. Envois
-plafonnés à **25 Mo** (pas de chunking : au-delà, l'envoi est refusé plutôt
-que de saturer la RAM). Dépôt de fichier par drag-drop **ou** sélecteur
+directs jusqu'à **8 Mo**, **morcelés jusqu'à 256 Mo** (1 en vol, accusés,
+RAM bornée) ; salons de groupe en maillage complet (texte + fichiers).
+Dépôt de fichier par drag-drop **ou** sélecteur
 (mobile).
 
 ## Apps retirées du noyau

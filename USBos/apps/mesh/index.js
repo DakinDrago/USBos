@@ -89,6 +89,15 @@ function shortGroup() {
 // Seuil effectif recommandé 8 Mo (message Partage/), refus dur 25 Mo absolu.
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const WARN_FILE_BYTES = 8 * 1024 * 1024;
+// Transferts morcelés (.upack-style, transit brut) : l'émetteur lit par
+// tranches à la demande, le receveur accuse chaque morceau (1 en vol).
+// RAM bornée des deux côtés -> plafond haut mais fini.
+const PIECE_BYTES = 256 * 1024;
+const MAX_PACK_BYTES = 256 * 1024 * 1024;
+const MAX_PIECES = 4096;
+const ACK_TIMEOUT_MS = 10000;
+const MAX_ACK_RETRIES = 9; // couvre la fenêtre d'acceptation manuelle (60 s)
+const TRANSFER_TIMEOUT_MS = 120000;
 const MAX_CHAT_MSGS = 50;
 const MAX_EARLY_QUEUE = 20;
 const MAX_ADVERT_MEMBERS = 50;
@@ -103,6 +112,11 @@ function newId() {
   b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
   const hx = [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
   return `${hx.slice(0, 8)}-${hx.slice(8, 12)}-${hx.slice(12, 16)}-${hx.slice(16, 20)}-${hx.slice(20)}`;
+}
+
+async function sha256Hex(u8) {
+  const d = await crypto.subtle.digest('SHA-256', u8);
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
 async function loadPeerJS(ctx) {
@@ -151,6 +165,7 @@ const USBosApp = {
     groupCard.append(gCreateRow, gList);
 
     const invitesBox = el('div', 'peers');
+    const transfersBox = el('div', 'peers');
     const peersBox = el('div', 'peers');
     const chat = el('div', 'chat');
     const clearChatBtn = el('button', 'mini', t('mesh.clearChat'));
@@ -170,7 +185,7 @@ const USBosApp = {
     wrap.append(
       el('h2', null, t('mesh.title')),
       el('p', 'hint', t('mesh.hint')),
-      idCard, connectRow, groupCard, invitesBox, peersBox, chat, sendRow, drop, filePick,
+      idCard, connectRow, groupCard, invitesBox, transfersBox, peersBox, chat, sendRow, drop, filePick,
       el('p', 'hint', t('mesh.helpLine'))
     );
     stage.append(wrap);
@@ -184,6 +199,10 @@ const USBosApp = {
     const groupMembers = new Map(); // groupCode -> Map peerCode -> true (membres connus, hors soi)
     const earlyQueue = new Map(); // peerId -> [payload] reçus avant acceptation
     const invites = new Map(); // `${group}:${from}` -> {group, name, from}
+    const peerCaps = new Map(); // peerId -> true si transferts morcelés supportés
+    const sendTransfers = new Map(); // id -> {name,size,mime,n,piece,hashes,group,file,peers:Map,row}
+    const recvTransfers = new Map(); // id -> {name,size,mime,n,piece,hashes,group,from,parts,received,timer,row}
+    const doneAcks = new Map(); // id -> {peer} : transferts reçus (renvoie packDone 60 s)
 
     function setStatus(text, cls) {
       status.querySelector('span:first-child').className = 'dot' + (cls ? ' ' + cls : '');
@@ -344,7 +363,7 @@ const USBosApp = {
           cfg.groups[inv.group] = { name: String(inv.name || inv.group).slice(0, 40) };
           await saveCfg();
           // S'annoncer à tous pour recevoir les listes de membres.
-          const hello = { type: 'hello', me: cfg.myId, groups: advertise(), wantJoin: null };
+          const hello = { type: 'hello', me: cfg.myId, groups: advertise(), wantJoin: null, packV: 1 };
           for (const conn of conns.values()) { try { conn.send(hello); } catch { /* noop */ } }
           try { ctx.ui.toast(t('mesh.inviteAccepted', { name: groupName(inv.group) })); } catch { /* noop */ }
           ctx.ui.log(`mesh: salon rejoint (${inv.group})`);
@@ -358,8 +377,269 @@ const USBosApp = {
       }
     }
 
-    async function quitGroup(code) {
-      const name = groupName(code);
+    // ---- Transferts morcelés (gros fichiers, RAM bornée) ----
+    function makeProgressRow(label, onCancel) {
+      const row = el('div', 'peer');
+      row.append(el('span', 'n', label));
+      const acts = el('div', 'acts');
+      const pct = el('span', 'n', '0 %');
+      acts.append(pct);
+      if (onCancel) {
+        const c = el('button', 'mini del', t('mesh.packCancelBtn'));
+        c.onclick = onCancel;
+        acts.append(c);
+      }
+      row.append(acts);
+      transfersBox.append(row);
+      return {
+        set(frac) { pct.textContent = `${Math.round(Math.max(0, Math.min(1, frac)) * 100)} %`; },
+        done() { try { row.remove(); } catch { /* noop */ } },
+      };
+    }
+
+    function updateSendRow(tr) {
+      let min = 1;
+      for (const st of tr.peers.values()) min = Math.min(min, st.next / tr.n);
+      tr.row.set(tr.peers.size ? min : 1);
+    }
+
+    function clearPeerTimer(st) { if (st.timer) { clearTimeout(st.timer); st.timer = null; } }
+
+    async function slicePiece(file, i, piece) {
+      const buf = await file.slice(i * piece, Math.min((i + 1) * piece, file.size)).arrayBuffer();
+      return new Uint8Array(buf);
+    }
+
+    async function startPackTransfer(file, targets, group) {
+      const piece = PIECE_BYTES;
+      const n = Math.ceil(file.size / piece);
+      if (!Number.isInteger(n) || n < 1 || n > MAX_PIECES) {
+        ctx.ui.log(`mesh: découpage impossible (${file.size} o)`);
+        try { ctx.ui.toast(t('mesh.packTooBig')); } catch { /* noop */ }
+        return;
+      }
+      const name = String(file.name || 'file').slice(0, 255);
+      const mime = String(file.type || '').slice(0, 128);
+      // Hash par morceau en lecture séquentielle (pic RAM = 1 morceau).
+      const hashes = [];
+      for (let i = 0; i < n; i++) {
+        try {
+          hashes.push(await sha256Hex(await slicePiece(file, i, piece)));
+        } catch (err) {
+          ctx.ui.log(`mesh: lecture fichier impossible (${err.message})`);
+          return;
+        }
+      }
+      const id = newId();
+      const row = makeProgressRow(t('mesh.packSending', { name }), () => abortSendTransfer(id, true));
+      const peers = new Map();
+      for (const { conn } of targets) peers.set(conn.peer, { conn, next: 0, timer: null, retries: 0 });
+      sendTransfers.set(id, { id, name, size: file.size, mime, n, piece, hashes, group, file, peers, row });
+      updateSendRow(sendTransfers.get(id));
+      ctx.ui.log(`mesh: envoi morcelé ${name} (${n} morceaux)`);
+      for (const peerId of peers.keys()) sendPackStart(id, peerId);
+    }
+
+    function sendPackStart(id, peerId) {
+      const tr = sendTransfers.get(id);
+      const st = tr && tr.peers.get(peerId);
+      if (!tr || !st) return;
+      clearPeerTimer(st);
+      try {
+        st.conn.send({ type: 'packStart', id, name: tr.name, size: tr.size, mime: tr.mime, n: tr.n, piece: tr.piece, hashes: tr.hashes, group: tr.group, from: cfg.myId, packV: 1 });
+      } catch (err) { dropSendPeer(id, peerId, err.message); return; }
+      st.timer = setTimeout(() => {
+        // Sans accusé (pair pas encore accepté ?) : on réémet jusqu'à
+        // couvrir la fenêtre d'acceptation manuelle, puis abandon.
+        if (st.retries >= MAX_ACK_RETRIES) { dropSendPeer(id, peerId, 'timeout'); return; }
+        st.retries++;
+        sendPackStart(id, peerId);
+      }, ACK_TIMEOUT_MS);
+    }
+
+    async function sendPiece(id, peerId, i) {
+      const tr = sendTransfers.get(id);
+      const st = tr && tr.peers.get(peerId);
+      if (!tr || !st) return;
+      clearPeerTimer(st);
+      st.next = i;
+      updateSendRow(tr);
+      let bytes;
+      try {
+        bytes = await slicePiece(tr.file, i, tr.piece);
+      } catch (err) { dropSendPeer(id, peerId, err.message); return; }
+      if (!sendTransfers.get(id) || !tr.peers.get(peerId)) return; // annulé pendant lecture
+      try {
+        st.conn.send({ type: 'packPiece', id, i, data: bytes.buffer });
+      } catch (err) { dropSendPeer(id, peerId, err.message); return; }
+      st.timer = setTimeout(() => {
+        if (st.retries >= 3) { dropSendPeer(id, peerId, 'timeout'); return; }
+        st.retries++;
+        sendPiece(id, peerId, i); // réémission (relecture tranche)
+      }, ACK_TIMEOUT_MS);
+    }
+
+    function onPackAck(conn, p) {
+      const tr = sendTransfers.get(String(p.id));
+      const st = tr && tr.peers.get(conn.peer);
+      if (!tr || !st) return;
+      const next = p.next;
+      if (!Number.isInteger(next) || next < 0 || next > tr.n) { dropSendPeer(tr.id, conn.peer, 'ack'); return; }
+      clearPeerTimer(st);
+      st.retries = 0;
+      if (next >= tr.n) { dropSendPeer(tr.id, conn.peer, 'ack'); return; }
+      void sendPiece(tr.id, conn.peer, next);
+    }
+
+    function dropSendPeer(id, peerId, reason) {
+      const tr = sendTransfers.get(id);
+      const st = tr && tr.peers.get(peerId);
+      if (!tr || !st) return;
+      clearPeerTimer(st);
+      tr.peers.delete(peerId);
+      const conn = conns.get(peerId);
+      if (conn) { try { conn.send({ type: 'packCancel', id }); } catch { /* noop */ } }
+      ctx.ui.log(`mesh: envoi abandonné vers ${peerId} (${reason})`);
+      updateSendRow(tr);
+      if (tr.peers.size === 0) {
+        tr.row.done();
+        sendTransfers.delete(id);
+        try { ctx.ui.toast(t('mesh.packFailed', { name: tr.name, error: String(reason || '?').slice(0, 80) })); } catch { /* noop */ }
+      }
+    }
+
+    function abortSendTransfer(id, notify) {
+      const tr = sendTransfers.get(id);
+      if (!tr) return;
+      for (const [peerId, st] of tr.peers) {
+        clearPeerTimer(st);
+        const conn = conns.get(peerId);
+        if (conn) { try { conn.send({ type: 'packCancel', id }); } catch { /* noop */ } }
+      }
+      tr.peers.clear();
+      tr.row.done();
+      sendTransfers.delete(id);
+      if (notify) {
+        try { ctx.ui.toast(t('mesh.packCancelled', { name: tr.name })); } catch { /* noop */ }
+        ctx.ui.log(`mesh: envoi annulé (${tr.name})`);
+      }
+    }
+
+    function armRecvTimer(st) {
+      if (st.timer) clearTimeout(st.timer);
+      st.timer = setTimeout(() => {
+        recvTransfers.delete(st.id);
+        st.row.done();
+        ctx.ui.log(`mesh: transfert ${st.name} abandonné (inactif)`);
+        try { ctx.ui.toast(t('mesh.packCancelled', { name: st.name })); } catch { /* noop */ }
+      }, TRANSFER_TIMEOUT_MS);
+    }
+
+    function ackRecv(st) {
+      const conn = conns.get(st.from);
+      if (conn) { try { conn.send({ type: 'packAck', id: st.id, next: st.received }); } catch { /* noop */ } }
+    }
+
+    function ensureRecv(meta) {
+      // Valide l'annonce puis crée (ou retrouve) l'état de réception.
+      if (!Number.isInteger(meta.n) || meta.n < 1 || meta.n > MAX_PIECES) return null;
+      if (!Number.isInteger(meta.size) || meta.size <= 0 || meta.size > MAX_PACK_BYTES) return null;
+      if (!Number.isInteger(meta.piece) || meta.piece <= 0 || meta.piece > PIECE_BYTES) return null;
+      if (!Array.isArray(meta.hashes) || meta.hashes.length !== meta.n) return null;
+      const g = meta.group != null ? String(meta.group) : null;
+      if (g && !cfg.groups[g]) return null; // pas notre salon
+      const existing = recvTransfers.get(meta.id);
+      if (existing) return { st: existing, created: false };
+      const row = makeProgressRow(t('mesh.packReceiving', { name: String(meta.name).slice(0, 60) }), () => abortRecv(meta.id, true));
+      const st = {
+        id: meta.id, name: String(meta.name || 'file').slice(0, 255),
+        size: meta.size, mime: String(meta.mime || '').slice(0, 128),
+        n: meta.n, piece: meta.piece, hashes: meta.hashes, group: g, from: meta.from,
+        parts: new Array(meta.n).fill(null), received: 0, timer: null, row,
+      };
+      recvTransfers.set(meta.id, st);
+      armRecvTimer(st);
+      return { st, created: true };
+    }
+
+    function recvStart(conn, p) {
+      const r = ensureRecv({
+        id: String(p.id), name: p.name, size: p.size, mime: p.mime, n: p.n,
+        piece: p.piece, hashes: p.hashes,
+        group: p.group != null ? String(p.group) : null, from: conn.peer,
+      });
+      if (!r) return;
+      ackRecv(r.st); // accuse la position courante (répare aussi les accusés perdus)
+    }
+
+    async function toBytes(data) {
+      if (data instanceof ArrayBuffer) return new Uint8Array(data);
+      if (typeof Blob !== 'undefined' && data instanceof Blob) return new Uint8Array(await data.arrayBuffer());
+      if (data && data.buffer instanceof ArrayBuffer) return new Uint8Array(data.buffer, data.byteOffset || 0, data.byteLength);
+      throw new Error('binary');
+    }
+
+    function recvPiece(conn, p) {
+      const st = recvTransfers.get(String(p.id));
+      if (!st || conn.peer !== st.from) {
+        // Transfert terminé côté receveur mais accusé final perdu :
+        // on renvoie packDone plutôt que de laisser l'émetteur réémettre.
+        const done = doneAcks.get(String(p.id));
+        if (done && conn.peer === done.peer) {
+          try { conn.send({ type: 'packDone', id: String(p.id) }); } catch { /* noop */ }
+        }
+        return;
+      }
+      const i = p.i;
+      if (!Number.isInteger(i) || i < 0 || i >= st.n) return;
+      if (st.parts[i]) { ackRecv(st); return; } // duplicata : ré-accuser
+      if (i !== st.received) return; // hors séquence : l'émetteur réémet sur timeout
+      toBytes(p.data).then(async (u8) => {
+        if (!recvTransfers.get(st.id)) return; // annulé entre-temps
+        if (u8.length > st.piece + 16 || await sha256Hex(u8) !== String(st.hashes[i]).toLowerCase()) {
+          ctx.ui.log(`mesh: morceau ${i} corrompu (${st.name}) — attente réémission`);
+          return; // pas d'accusé : l'émetteur réémet sur timeout
+        }
+        st.parts[i] = u8;
+        st.received++;
+        armRecvTimer(st);
+        st.row.set(st.received / st.n);
+        if (st.received >= st.n) completeRecv(st);
+        else ackRecv(st);
+      }).catch((err) => ctx.ui.log(`mesh: morceau illisible (${err.message})`));
+    }
+
+    function completeRecv(st) {
+      recvTransfers.delete(st.id);
+      if (st.timer) clearTimeout(st.timer);
+      st.row.done();
+      const blob = new Blob(st.parts, { type: st.mime || 'application/octet-stream' });
+      const url = URL.createObjectURL(blob);
+      blobUrls.add(url);
+      const conn = conns.get(st.from);
+      if (conn) { try { conn.send({ type: 'packDone', id: st.id }); } catch { /* noop */ } }
+      doneAcks.set(st.id, { peer: st.from });
+      setTimeout(() => doneAcks.delete(st.id), 60000);
+      if (doneAcks.size > 20) { const k = doneAcks.keys().next().value; doneAcks.delete(k); }
+      appendFileMsg(st.name, st.size, false, st.from, url, st.group);
+      ctx.ui.log(`mesh: reçu ${st.name} (${st.n} morceaux)`);
+    }
+
+    function abortRecv(id, notify) {
+      const st = recvTransfers.get(String(id));
+      if (!st) return;
+      recvTransfers.delete(st.id);
+      if (st.timer) clearTimeout(st.timer);
+      st.row.done();
+      const conn = conns.get(st.from);
+      if (conn) { try { conn.send({ type: 'packCancel', id: st.id }); } catch { /* noop */ } }
+      if (notify) {
+        try { ctx.ui.toast(t('mesh.packCancelled', { name: st.name })); } catch { /* noop */ }
+        ctx.ui.log(`mesh: réception annulée (${st.name})`);
+      }
+    }
+
+    async function quitGroup(code) {      const name = groupName(code);
       const bye = { type: 'bye', group: code, from: cfg.myId };
       for (const id of membersOf(code)) {
         const conn = conns.get(id);
@@ -472,9 +752,10 @@ const USBosApp = {
       if (payload.type === 'hello') {
         const groupsObj = payload.groups && typeof payload.groups === 'object' ? payload.groups : {};
         peerGroups.set(conn.peer, groupsObj);
+        peerCaps.set(conn.peer, payload.packV === 1);
         mergeMembers(conn.peer, groupsObj);
         // Répondre pour que l'appelant découvre aussi nos salons/membres.
-        try { conn.send({ type: 'welcome', me: cfg.myId, groups: advertise() }); } catch { /* noop */ }
+        try { conn.send({ type: 'welcome', me: cfg.myId, groups: advertise(), packV: 1 }); } catch { /* noop */ }
         const want = payload.wantJoin;
         if (typeof want === 'string' && want && cfg.groups[want]) {
           if (addMember(want, conn.peer)) {
@@ -491,6 +772,7 @@ const USBosApp = {
       if (payload.type === 'welcome') {
         const groupsObj = payload.groups && typeof payload.groups === 'object' ? payload.groups : {};
         peerGroups.set(conn.peer, groupsObj);
+        peerCaps.set(conn.peer, payload.packV === 1);
         mergeMembers(conn.peer, groupsObj);
         return;
       }
@@ -519,6 +801,34 @@ const USBosApp = {
           renderGroups();
           ctx.ui.log(`mesh: ${conn.peer} a quitté ${code}`);
         }
+        return;
+      }
+      if (payload.type === 'packStart') { recvStart(conn, payload); return; }
+      if (payload.type === 'packPiece') { recvPiece(conn, payload); return; }
+      if (payload.type === 'packAck') {
+        if (sendTransfers.size) onPackAck(conn, payload);
+        return;
+      }
+      if (payload.type === 'packDone') {
+        const tr = sendTransfers.get(String(payload.id));
+        if (tr && tr.peers.has(conn.peer)) {
+          const st = tr.peers.get(conn.peer);
+          clearPeerTimer(st);
+          tr.peers.delete(conn.peer);
+          updateSendRow(tr);
+          if (tr.peers.size === 0) {
+            tr.row.done();
+            sendTransfers.delete(tr.id);
+            appendFileMsg(tr.name, tr.size, true, null, null, tr.group);
+            ctx.ui.log(`mesh: envoi terminé (${tr.name})`);
+          }
+        }
+        return;
+      }
+      if (payload.type === 'packCancel') {
+        const id = String(payload.id);
+        if (sendTransfers.has(id)) { abortSendTransfer(id, false); ctx.ui.log(`mesh: transfert annulé par ${conn.peer}`); return; }
+        if (recvTransfers.has(id)) { abortRecv(id, false); return; }
         return;
       }
       // Garde anti-causerie croisée : un message taggé d'un salon qu'on
@@ -555,7 +865,7 @@ const USBosApp = {
       dialing.add(conn.peer);
       conn.on('open', () => {
         acceptConn(conn);
-        try { conn.send({ type: 'hello', me: cfg.myId, groups: advertise(), wantJoin: wantJoin || null }); } catch { /* noop */ }
+        try { conn.send({ type: 'hello', me: cfg.myId, groups: advertise(), wantJoin: wantJoin || null, packV: 1 }); } catch { /* noop */ }
       });
       conn.on('close', () => {
         dialing.delete(conn.peer);
@@ -732,22 +1042,9 @@ const USBosApp = {
 
     async function sendFile(file) {
       if (conns.size === 0) return;
-      if (file.size > MAX_FILE_BYTES) {
-        ctx.ui.log(`mesh: fichier trop volumineux (${(file.size / 1048576).toFixed(1)} Mo > 25 Mo) — envoi refusé`);
-        try { ctx.ui.toast(t('mesh.fileTooBig')); } catch { /* noop */ }
-        return;
-      }
-      // Garde RAM sans chunking : seuil effectif 8 Mo avec conseil Partage/.
-      if (file.size > WARN_FILE_BYTES) {
-        ctx.ui.log(`mesh: fichier >8 Mo (${(file.size / 1048576).toFixed(1)} Mo) — utilisez Partage/`);
-        try { ctx.ui.toast(t('mesh.fileBigShared')); } catch { /* noop */ }
-        return;
-      }
-      let buf;
-      try {
-        buf = await file.arrayBuffer();
-      } catch (err) {
-        ctx.ui.log(`mesh: lecture fichier impossible (${err.message})`);
+      if (file.size > MAX_PACK_BYTES) {
+        ctx.ui.log(`mesh: fichier trop volumineux (${(file.size / 1048576).toFixed(1)} Mo > 256 Mo) — utilisez Partage/`);
+        try { ctx.ui.toast(t('mesh.packTooBig')); } catch { /* noop */ }
         return;
       }
       const scope = scopeSel.value;
@@ -755,6 +1052,31 @@ const USBosApp = {
       const targets = scopeTargets().map((e) => (e.conn ? e : { conn: e, group: null }));
       if (!targets.length) {
         try { ctx.ui.toast(t('mesh.noTargets')); } catch { /* noop */ }
+        return;
+      }
+      if (file.size > WARN_FILE_BYTES) {
+        // Chemin morcelé (RAM bornée) : pairs à jour uniquement.
+        const modern = targets.filter(({ conn }) => peerCaps.get(conn.peer));
+        const legacy = targets.filter(({ conn }) => !peerCaps.get(conn.peer));
+        if (legacy.length) {
+          ctx.ui.log(`mesh: ${legacy.length} pair(s) en ancienne version (fichiers >8 Mo impossibles)`);
+          try { ctx.ui.toast(t('mesh.packLegacy', { peer: legacy[0].conn.peer })); } catch { /* noop */ }
+        }
+        if (!modern.length) return;
+        await startPackTransfer(file, modern, group);
+        return;
+      }
+      // Chemin direct historique (≤8 Mo, compatible 1.2.0).
+      if (file.size > MAX_FILE_BYTES) {
+        ctx.ui.log(`mesh: fichier trop volumineux (${(file.size / 1048576).toFixed(1)} Mo > 25 Mo) — envoi refusé`);
+        try { ctx.ui.toast(t('mesh.fileTooBig')); } catch { /* noop */ }
+        return;
+      }
+      let buf;
+      try {
+        buf = await file.arrayBuffer();
+      } catch (err) {
+        ctx.ui.log(`mesh: lecture fichier impossible (${err.message})`);
         return;
       }
       for (const { conn } of targets) {
@@ -784,6 +1106,17 @@ const USBosApp = {
       pendingIncoming.clear();
       earlyQueue.clear();
       invites.clear();
+      for (const [id, tr] of sendTransfers) {
+        for (const st of tr.peers.values()) clearPeerTimer(st);
+        try { tr.row.done(); } catch { /* noop */ }
+      }
+      sendTransfers.clear();
+      for (const st of recvTransfers.values()) {
+        if (st.timer) clearTimeout(st.timer);
+        try { st.row.done(); } catch { /* noop */ }
+      }
+      recvTransfers.clear();
+      doneAcks.clear();
       dialing.clear();
       peerGroups.clear();
       groupMembers.clear();

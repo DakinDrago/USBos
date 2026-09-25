@@ -36,10 +36,10 @@ PRESERVE_ON_UPDATE = {"data", "config"}
 
 # Fonds d'écran JPG par défaut : déposés dans USBos/config/wallpaper-slides/
 # des SOURCES, embarqués tels quels (installés à neuf, jamais écrasés).
-# Garde-fous : images vraies (magic bytes), 2 Mo/fichier, 5 Mo au total.
+# Garde-fous : images vraies (magic bytes), 8 Mo/fichier, 5 Mo au total.
 WALLPAPER_SRC_DIR = "config/wallpaper-slides"
 WALLPAPER_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
-WALLPAPER_MAX_FILE = 2 * 1024 * 1024
+WALLPAPER_MAX_FILE = 8 * 1024 * 1024
 WALLPAPER_MAX_TOTAL = 5 * 1024 * 1024
 
 # Fichiers isolés (égalité stricte) vs dossiers (préfixe) embarqués dans
@@ -157,7 +157,7 @@ def collect_files():
                     raise SystemExit(f"Fond refusé (pas une vraie image) : {rel}")
                 size = p.stat().st_size
                 if size > WALLPAPER_MAX_FILE:
-                    raise SystemExit(f"Fond trop lourd (max 2 Mo) : {rel}")
+                    raise SystemExit(f"Fond trop lourd (max 8 Mo) : {rel}")
                 wall_total += size
                 if wall_total > WALLPAPER_MAX_TOTAL:
                     raise SystemExit("Fonds par défaut : 5 Mo au total max.")

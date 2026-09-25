@@ -7,7 +7,7 @@
  */
 'use strict';
 
-const KERNEL_VERSION = '2.3.1';
+const KERNEL_VERSION = '2.3.2';
 const DB_NAME = 'usbos-kernel';
 const DB_STORE = 'handles';
 const DB_KEY = 'root';
@@ -405,7 +405,8 @@ const WALLPAPER_SVG = {
 };
 const WALL_SLIDES_SVG = ['svg:montagnes', 'svg:vagues', 'svg:dunes', 'svg:boreale', 'svg:soleil'];
 const WALL_IMG_DIR = 'config:wallpaper-slides';
-const WALL_IMG_MAX = 2 * 1024 * 1024; // 2 Mo par image
+const WALL_IMG_MAX = 8 * 1024 * 1024; // 8 Mo par image (réduite à 2048 px à l'import)
+const WALL_IMG_MAX_DIM = 2048;
 const WALL_IMG_COUNT = 10;
 const WALL_IMG_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
 const WALL_IMG_MIME = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif' };
@@ -589,23 +590,53 @@ function guestDeniedError() {
   try { s = tx(k); } catch { s = null; }
   return new Error(s && s !== k ? s : 'Guest session: action denied.');
 }
-/** Importe une image (validée) dans les slides. Retourne le nom stocké. */
+/** Importe une image (validée, réduite si géante) dans les slides. Retourne le nom stocké. */
 async function importWallImage(name, buf) {
   if (!state.vfs) throw new Error(t('shell.errors.noKey'));
   if (state.guest) throw guestDeniedError();
   const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
-  const err = validateWallImage(bytes, name);
-  if (err) throw new Error(err);
   const safe = wallImageName(name);
   if (!safe) throw new Error(t('shell.settings.wallImgName'));
+  // Réduction auto (JPEG/PNG/WebP > 2048 px -> JPEG 2048 px) : un fond
+  // de 8 Mo décodé pèserait ~100 Mo de pixels. GIF conservés tels quels
+  // (animation). Tout échec -> on garde l'original (validé ensuite).
+  let data = bytes;
+  try {
+    data = await downscaleWallImage(bytes, safe);
+  } catch { data = bytes; }
+  const err = validateWallImage(data, name);
+  if (err) throw new Error(err);
   const prefs = currentWallPrefs();
   if (prefs.images.length >= WALL_IMG_COUNT && !prefs.images.includes(safe)) {
     throw new Error(t('shell.settings.wallMaxN', { n: WALL_IMG_COUNT }));
   }
-  await state.vfs.writeBinary(`${WALL_IMG_DIR}/${safe}`, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+  await state.vfs.writeBinary(`${WALL_IMG_DIR}/${safe}`, data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
   const images = prefs.images.includes(safe) ? prefs.images : [...prefs.images, safe];
   await saveWallpaper({ images });
   return safe;
+}
+/** Réduit une image trop grande (retourne l'original si inutile/impossible). */
+async function downscaleWallImage(bytes, name) {
+  const ext = (String(name).split('.').pop() || '').toLowerCase();
+  if (ext === 'gif') return bytes; // animation préservée
+  if (typeof createImageBitmap !== 'function' || typeof document === 'undefined') return bytes;
+  const bmp = await createImageBitmap(new Blob([bytes]));
+  try {
+    if (bmp.width <= WALL_IMG_MAX_DIM && bmp.height <= WALL_IMG_MAX_DIM) return bytes;
+    const scale = WALL_IMG_MAX_DIM / Math.max(bmp.width, bmp.height);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bmp.width * scale));
+    canvas.height = Math.max(1, Math.round(bmp.height * scale));
+    const g = canvas.getContext('2d');
+    if (!g) return bytes;
+    g.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    const blob = canvas.convertToBlob
+      ? await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.9 })
+      : await new Promise((res, rej) => canvas.toBlob((b) => (b ? res(b) : rej(new Error('encode'))), 'image/jpeg', 0.9));
+    return new Uint8Array(await blob.arrayBuffer());
+  } finally {
+    try { bmp.close(); } catch { /* noop */ }
+  }
 }
 async function removeWallImage(name) {
   if (state.guest) throw guestDeniedError();
@@ -1819,9 +1850,11 @@ async function restoreMigBackup() {
  * - l'id d'app utilisé est TOUJOURS state.activeAppId (jamais celui déclaré
  *   par l'iframe, qui serait forgeable) ;
  * - chaque chemin relatif est validé (rejet de "..", caractères interdits) ;
- * - tailles plafonnées (25 Mo par écriture RPC, 2 Mo pour texte/JSON).
+ * - tailles plafonnées (256 Mo par écriture binaire RPC, 2 Mo pour texte/JSON).
+ *   Le binaire transite en RAM : au-delà de 256 Mo, passez par Partage/
+ *   (dépôt direct, sans pont) ou découpez en .upack.
  */
-const RPC_MAX_BINARY = 25 * 1024 * 1024;
+const RPC_MAX_BINARY = 256 * 1024 * 1024;
 const RPC_MAX_TEXT = 2 * 1024 * 1024;
 const toastThrottle = new Map(); // appId -> timestamp du dernier toast
 const logThrottle = new Map(); // appId -> {n, ts} (max 60 logs/10s par app)
@@ -3316,6 +3349,14 @@ function sharedMime(name) {
   };
   return map[ext] || 'application/octet-stream';
 }
+/** Type prévisualisable dans l'espace invité (image/video/audio), sinon null. */
+function guestPreviewKind(name) {
+  const ext = (String(name).split('.').pop() || '').toLowerCase();
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return 'image';
+  if (['mp4', 'webm', 'mkv', 'avi', 'mov'].includes(ext)) return 'video';
+  if (['mp3', 'wav', 'ogg', 'flac', 'm4a'].includes(ext)) return 'audio';
+  return null;
+}
 /** Joint un nom à une base shared: sans jamais produire 'shared:/' ambigu. */
 function joinShared(base, name) {
   return base === 'shared:' ? `shared:${name}` : `${base}/${name}`;
@@ -3363,6 +3404,60 @@ function renderGuest(stage) {
 
   let path = []; // segments validés issus du listage
   const vpath = () => (path.length ? 'shared:' + path.join('/') : 'shared:');
+  let previewUrl = null;
+  let previewCloser = null;
+  const revokePreviewUrl = () => {
+    if (previewUrl) { try { URL.revokeObjectURL(previewUrl); } catch { /* noop */ } previewUrl = null; }
+  };
+  const closePreviewNow = () => {
+    const f = previewCloser;
+    previewCloser = null;
+    if (f) { try { f(); } catch { /* noop */ } }
+  };
+
+  async function previewSharedFile(name) {
+    closePreviewNow();
+    const kind = guestPreviewKind(name);
+    if (!kind) return;
+    let buf;
+    try {
+      buf = await state.vfs.readBinary(joinShared(vpath(), name));
+    } catch (err) {
+      toast(t('shell.guest.previewFailed', { error: err.message }));
+      return;
+    }
+    if (buf.byteLength > 100 * 1024 * 1024) {
+      toast(t('shell.guest.previewTooBig'));
+      return;
+    }
+    const url = URL.createObjectURL(new Blob([buf], { type: sharedMime(name) }));
+    previewUrl = url;
+    const ov = h('div', { class: 'guest-preview' });
+    let media;
+    if (kind === 'image') {
+      media = document.createElement('img');
+      media.src = url; media.alt = name;
+    } else if (kind === 'video') {
+      media = document.createElement('video');
+      media.src = url; media.controls = true; media.autoplay = true;
+    } else {
+      media = document.createElement('audio');
+      media.src = url; media.controls = true; media.autoplay = true;
+    }
+    const closePreview = () => {
+      document.removeEventListener('keydown', onKey);
+      try { ov.remove(); } catch { /* noop */ }
+      revokePreviewUrl();
+    };
+    const onKey = (ev) => { if (ev.key === 'Escape') closePreviewNow(); };
+    document.addEventListener('keydown', onKey);
+    previewCloser = closePreview;
+    const close = h('button', { class: 'btn', onclick: () => closePreview(), title: t('shell.guest.previewClose') }, t('shell.guest.previewClose'));
+    close.type = 'button';
+    ov.onclick = (ev) => { if (ev.target === ov) closePreview(); };
+    ov.append(media, h('div', { class: 'cap' }, name), close);
+    wrap.append(ov);
+  }
 
   function renderCrumbs() {
     crumbs.innerHTML = '';
@@ -3399,6 +3494,17 @@ function renderGuest(stage) {
       if (e.kind === 'directory') {
         row.onclick = () => { path = [...path, e.name]; renderDir(); };
       } else {
+        const kind = guestPreviewKind(e.name);
+        if (kind) {
+          row.classList.add('media');
+          row.onclick = () => { void previewSharedFile(e.name); };
+          const pv = h('button', { class: 'btn mini', onclick: async (ev) => {
+            ev.stopPropagation();
+            await previewSharedFile(e.name);
+          } }, t('shell.guest.preview'));
+          pv.type = 'button';
+          row.append(pv);
+        }
         const dl = h('button', { class: 'btn mini', onclick: async (ev) => {
           ev.stopPropagation();
           try {
@@ -3414,7 +3520,8 @@ function renderGuest(stage) {
           }
         } }, t('shell.guest.download'));
         dl.type = 'button';
-        const del = h('button', { class: 'btn mini del', onclick: async () => {
+        const del = h('button', { class: 'btn mini del', onclick: async (ev) => {
+          if (ev) ev.stopPropagation();
           if (del.textContent !== t('shell.guest.sure')) { del.textContent = t('shell.guest.sure'); return; }
           try {
             await state.vfs.remove(joinShared(vpath(), e.name));
@@ -3461,7 +3568,7 @@ function renderGuest(stage) {
     for (const f of files) {
       const name = guestCheckName(f.name);
       if (!name) { skipped++; continue; }
-      if (f.size > 25 * 1024 * 1024) { skipped++; continue; }
+      if (f.size > 100 * 1024 * 1024) { skipped++; continue; }
       try {
         await state.vfs.writeBinary(joinShared(vpath(), name), await f.arrayBuffer());
         ok++;

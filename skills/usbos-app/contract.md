@@ -43,7 +43,7 @@ return USBosApp;                     // top-level return: legal, code runs via n
 |---|---|---|
 | `readText(p)` / `writeText(p, s)` | `data:<id>/` | text ≤ 2 MB per call |
 | `readJSON(p)` / `writeJSON(p, o)` | `data:<id>/` | same cap (serialized) |
-| `readBinary(p)` / `writeBinary(p, buf)` | `data:<id>/` | binary ≤ 25 MB per call |
+| `readBinary(p)` / `writeBinary(p, buf)` | `data:<id>/` | binary ≤ 256 MB per call (RAM!) |
 | `exists(p)` / `remove(p)` / `list(p='')` | `data:<id>/` | `remove` is recursive |
 | `readAppAsset(p)` | `apps:<id>/` read-only | static assets (e.g. `vendor/lib.js`), never encrypted |
 | `readShared(p)` / `writeShared(p, buf)` | `shared:/` (="Partage/") | **common to all apps**, plaintext by design |
