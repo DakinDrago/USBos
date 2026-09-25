@@ -1,0 +1,36 @@
+# USBos — fins de ligne : LF partout.
+# Les hash files.json sont calculés sur l'arbre de travail mais raw sert
+# les blobs stockés : le moindre CRLF local casse toutes les mises à jour
+# ("Bad hash"). Tout texte est donc forcé en LF, tout binaire exclu.
+* text=auto eol=lf
+*.js text eol=lf
+*.cjs text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.md text eol=lf
+*.py text eol=lf
+*.txt text eol=lf
+# Binaires : jamais de conversion.
+*.min.js -text
+*.png -text
+*.jpg -text
+*.jpeg -text
+*.webp -text
+*.gif -text
+*.bmp -text
+*.svg -text
+*.mp4 -text
+*.webm -text
+*.mkv -text
+*.mov -text
+*.avi -text
+*.mp3 -text
+*.wav -text
+*.ogg -text
+*.flac -text
+*.m4a -text
+*.pdf -text
+*.zip -text
+*.ico -text

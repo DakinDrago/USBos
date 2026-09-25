@@ -1,7 +1,7 @@
 {
   "files": {
     "index.js": "efce1179af927c0223300f1eee33896ad318341802fb9da2fdfb08aacc48df64",
-    "manifest.json": "7f3ebcf4e7180fdd84ad46c98f8437ee1524ac22e56508b42ea89a2675bb4c65",
+    "manifest.json": "72f1e2fd5688efeb822173ffd6f78b06a3193a79dcdfce478ba490c1bba63323",
     "vendor/peerjs.min.js": "1ce72195e832168c32d8d6a060c1ba3cdb4531036ddaa0575568346cc867f29d"
   },
   "version": "1.4.0"

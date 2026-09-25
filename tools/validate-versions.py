@@ -17,6 +17,7 @@ import hashlib
 import json
 import pathlib
 import re
+import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).parent.parent
@@ -37,6 +38,29 @@ def check(rule, ok, detail=""):
 
 
 def main() -> int:
+    # Garde-fou fins de ligne : les hash files.json sont calculés sur
+    # l'arbre mais raw sert les blobs stockés (LF normalisé). Le moindre
+    # CRLF local invalide toute la publication ("Bad hash" côté clés).
+    try:
+        eol = subprocess.run(["git", "ls-files", "--eol"], cwd=ROOT,
+                             capture_output=True, text=True, timeout=30)
+        if eol.returncode == 0:
+            bad = []
+            for line in eol.stdout.splitlines():
+                toks = line.split()
+                if len(toks) < 4 or toks[1] in ("w/lf", "w/-"):
+                    continue
+                i = 2
+                while i < len(toks) and (toks[i].startswith("attr/") or ("=" in toks[i] and "/" not in toks[i])):
+                    i += 1
+                bad.append(" ".join(toks[i:]) or line)
+            check("eol-lf", not bad,
+                  f"{len(bad)} fichier(s) non-LF : {bad[:5]}" if bad else "arbre tout-LF")
+        else:
+            results.append(("WARN", "eol-lf", "git indisponible, non vérifié"))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        results.append(("WARN", "eol-lf", "git indisponible, non vérifié"))
+
     try:
         kernel_src = KERNEL_JS.read_text(encoding="utf-8")
     except OSError as err:

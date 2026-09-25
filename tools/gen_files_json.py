@@ -45,8 +45,10 @@ MAX_FILE_BYTES = 50 * 1024 * 1024
 
 
 def atomic_write(path: pathlib.Path, text: str) -> None:
+    # newline="\n" : LF forcé même sous Windows, sinon les hash files.json
+    # (calculés sur l'arbre) divergent des blobs servis (LF normalisé).
     tmp = path.with_name(path.name + ".tmp")
-    with tmp.open("w", encoding="utf-8") as f:
+    with tmp.open("w", encoding="utf-8", newline="\n") as f:
         f.write(text)
         f.flush()
         os.fsync(f.fileno())

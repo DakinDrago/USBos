@@ -115,7 +115,7 @@ def sync_versions(kernel_version: str) -> None:
         print(f"version.json : kernel {vobj.get('kernel')} -> {kernel_version}.")
         vobj["kernel"] = kernel_version
         KERNEL_VERSION_JSON.write_text(
-            json.dumps(vobj, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+            json.dumps(vobj, indent=2, ensure_ascii=False) + "\n", encoding="utf-8", newline="\n")
 
     try:
         html = INDEX_HTML.read_text(encoding="utf-8")
@@ -127,7 +127,7 @@ def sync_versions(kernel_version: str) -> None:
         raise SystemExit("index.html : aucun asset system/ à versionner (?v=).")
     if new_html != html:
         print(f"index.html : {n} asset(s) aligné(s) sur ?v={kernel_version}.")
-        INDEX_HTML.write_text(new_html, encoding="utf-8")
+        INDEX_HTML.write_text(new_html, encoding="utf-8", newline="\n")
 
 
 def tree_hash(hashes: dict) -> str:
@@ -196,7 +196,7 @@ def main():
     # verrouille l'injection JSON dans le <script> du gabarit.
     payload_json = json.dumps(payload, separators=(",", ":")).replace("<", "\\u003c")
     out = template.replace("__USBOS_PAYLOAD__", payload_json)
-    OUT.write_text(out, encoding="utf-8")
+    OUT.write_text(out, encoding="utf-8", newline="\n")
     total_kb = sum(len(v) for v in files.values()) * 3 // 4 // 1024
     skipped_note = " (data/ et fichiers locaux exclus)"
     print(f"installer.html généré : {len(files)} fichiers, ~{total_kb} Ko encodés"
