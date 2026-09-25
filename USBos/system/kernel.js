@@ -7,7 +7,7 @@
  */
 'use strict';
 
-const KERNEL_VERSION = '2.3.2';
+const KERNEL_VERSION = '2.3.3';
 const DB_NAME = 'usbos-kernel';
 const DB_STORE = 'handles';
 const DB_KEY = 'root';
