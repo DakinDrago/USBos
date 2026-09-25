@@ -1,5 +1,9 @@
 {
   "_sandbox_note": "Sandbox blanchi par le noyau (allow-scripts allow-forms allow-modals allow-downloads, allow-popups). allow-same-origin est interdit car il donnerait a cette app la meme origine que le noyau (perte d'isolation).",
+  "csp": {
+    "_note": "Requis pour la signalisation PeerJS (WebSocket) et la découverte NAT WebRTC (STUN). Toute connexion RTCPeerConnection aux pairs eux-mêmes n'est pas couverte par connect-src.",
+    "connectSrc": ["wss://0.peerjs.com", "https://0.peerjs.com", "stun:stun.l.google.com:19302"]
+  },
   "description": "Discussion et transfert de fichiers directs entre clés USBos, en WebRTC (signalisation publique PeerJS). Connexion par code avec confirmation manuelle, plus salons de groupe en maillage complet (texte + fichiers).",
   "entry": "index.js",
   "icon": "📡",

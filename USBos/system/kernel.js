@@ -2004,7 +2004,16 @@ function buildSandboxSrcdoc(id, manifest, code) {
   const i18nDictJson = escapeForInlineScript(JSON.stringify(appDict));
   const i18nFallbackJson = escapeForInlineScript(JSON.stringify(appFallback));
   const keyIdJson = escapeForInlineScript(JSON.stringify(state.keyId || null));
+  // CSP par app : par défaut aucune connexion réseau sortante (les apps ne
+  // devraient parler qu'au kernel via postMessage). Une app qui a un besoin
+  // réseau légitime (ex. Mesh/WebRTC signaling) le déclare dans son
+  // manifest.json (`csp.connectSrc`), jamais implicitement.
+  const cspConnect = (Array.isArray(manifest.csp && manifest.csp.connectSrc) && manifest.csp.connectSrc.length)
+    ? manifest.csp.connectSrc.map((s) => String(s)).join(' ')
+    : "'none'";
+  const csp = `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; connect-src ${cspConnect}; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';`;
   return `<!DOCTYPE html><html lang="${appLang}" data-theme="${resolveThemeName()}" data-accent="${currentThemePrefs().accent}" data-radius="${uip.radius}" data-fs="${uip.fs}" data-density="${uip.density}" data-barpos="${uip.barpos}" data-side="${uip.side}"><head><meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="${csp}">
 <style id="usbos-theme">
 ${buildThemeCSS()}
 </style>
