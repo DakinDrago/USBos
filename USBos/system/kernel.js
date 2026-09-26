@@ -7,7 +7,7 @@
  */
 'use strict';
 
-const KERNEL_VERSION = '2.3.3';
+const KERNEL_VERSION = '2.4.0';
 const DB_NAME = 'usbos-kernel';
 const DB_STORE = 'handles';
 const DB_KEY = 'root';
@@ -3298,6 +3298,8 @@ function renderSettings(stage) {
     updCtl.append(msg);
     const appsCtl = setItem(card, '🧩', t('shell.settings.sysApps'), tp('shell.settings.sysAppsCount', state.apps.size));
     appsCtl.append(h('span', { class: 'muted' }, [...state.apps.values()].map((a) => a.manifest.name || a.manifest.id).join(', ') || '—'));
+    const guideCtl = setItem(card, '📘', t('shell.settings.sysGuide'), t('shell.settings.sysGuideDetail'));
+    guideCtl.append(h('a', { class: 'btn', href: 'https://github.com/DakinDrago/USBos', target: '_blank', rel: 'noopener noreferrer' }, t('shell.settings.sysGuideBtn')));
   });
 
   // Shortcuts

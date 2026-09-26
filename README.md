@@ -1,5 +1,7 @@
 # USBos
 
+**[Français](README.md) | [English](README.en.md)**
+
 **Ton bureau, tes apps, tes données — sur une clé USB, sans rien installer sur l'ordinateur.**
 
 USBos est un « système » qui tourne entièrement dans le navigateur. Tu le lances depuis une clé USB (ou n'importe quel dossier), et il te donne un bureau avec agenda, notes, gestionnaire de mots de passe, galerie, documents Markdown et chat de fichiers en pair-à-pair — le tout chiffré, et utilisable sur n'importe quel ordinateur où tu branches ta clé.
@@ -27,7 +29,7 @@ Aucun serveur, aucune installation, aucun compte à créer. Ce qui est sur la cl
 
 ## Installer USBos sur une clé
 
-1. Télécharge le dépôt (bouton **Code → Download ZIP** en haut de cette page, ou `git clone`) et ouvre le fichier **`installer.html`** dans ton navigateur.
+1. Va dans l'onglet **Releases** du dépôt (à droite sur GitHub, ou via le lien direct `.../releases/latest`), télécharge le fichier **`installer.html`** de la dernière version, et ouvre-le dans ton navigateur — pas besoin de cloner ou de télécharger tout le dépôt.
 2. Clique sur **Choisir un dossier**, et sélectionne le **dossier parent** où tu veux installer USBos (par exemple la racine de ta clé USB) — pas un dossier `USBos` existant, l'installeur le crée lui-même.
    > Choisir directement un dossier `USBos/` déjà existant limite certaines fonctions de partage — vise toujours le dossier *au-dessus*.
 3. Choisis le mode d'installation :
@@ -191,19 +193,18 @@ return USBosApp;
 
 Le noyau communique avec chaque app via `postMessage` uniquement ; l'app n'a jamais d'accès direct au système de fichiers ni au DOM du noyau. Voir `skills/usbos-app/SKILL.md` pour le gabarit complet et le script de validation (`validate.py`).
 
-### Publier une nouvelle version
+### Publier une nouvelle mise à jour
+
+Une seule commande, un seul endroit à éditer avant de la lancer :
+
+- pour le noyau : `const KERNEL_VERSION` dans `system/kernel.js` ;
+- pour une app : le champ `"version"` de `apps/<id>/manifest.json`.
 
 ```bash
-# 1. Bumper KERNEL_VERSION dans system/kernel.js
-python tools/validate-versions.py      # doit renvoyer 0 FAIL
-python make_installer.py                # régénère installer.html
-
-# 2. Juste avant de committer, en dernier :
-python tools/gen_files_json.py USBos/system --version x.y.z
-python tools/gen_files_json.py USBos/apps/<id>
+python tools/release.py
 ```
 
-⚠️ `gen_files_json` doit toujours être exécuté **en dernier**, après tout autre changement — un edit fait après invalide les hash de vérification et bloque la mise à jour côté clients (« Bad hash »).
+Ça régénère automatiquement, pour le noyau **et** chaque app (pas besoin de préciser lesquels ont changé) : les `version.json` miroirs, les `?v=` de `index.html`, tous les `files.json`/hash, et `installer.html` — puis lance `validate-versions.py` et affiche le résultat. Si rien n'a changé quelque part, la sortie est identique (aucun bruit dans git). Il ne reste qu'à committer et pousser sur `main`.
 
 ### Outils utiles
 
@@ -211,6 +212,7 @@ python tools/gen_files_json.py USBos/apps/<id>
 python tools/validate-versions.py      # cohérence des versions dans tout le dépôt
 python tools/validate-lang.py          # symétrie des dictionnaires FR/EN
 node tools/test-lang.cjs               # tests runtime sur les traductions
+python tools/release.py                # la commande unique : synchronise tout et reconstruit installer.html
 python tools/upack.py pack|verify|unpack ...   # conteneur .upack (exports/imports)
 python skills/usbos-app/validate.py USBos/apps/<id>/   # valider une nouvelle app
 ```

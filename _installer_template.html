@@ -6,6 +6,9 @@
 <title>Installer USBos</title>
 <style>
 :root{--bg:#0d1117;--panel:#161b22;--panel2:#1c2330;--border:#2b3442;--text:#e6edf3;--muted:#8b98a9;--accent:#4f8cff;--accent2:#7c5cff;--ok:#3fb950;--err:#f85149;--warn:#d29922}
+@media (prefers-color-scheme: light){
+  :root{--bg:#f6f8fa;--panel:#ffffff;--panel2:#f1f3f5;--border:#d0d7de;--text:#1f2328;--muted:#57606a}
+}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--text);font:14px/1.5 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center}
 .card{max-width:600px;width:100%;background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:32px;margin:20px}
@@ -30,7 +33,7 @@ button.ghost{background:var(--panel2);border:1px solid var(--border)}
 .danger-check{display:none;gap:8px;align-items:flex-start;background:rgba(248,81,73,.08);border:1px solid var(--err);border-radius:10px;padding:10px 12px;font-size:13px;margin-bottom:14px}
 .danger-check.show{display:flex}
 .danger-check input{width:auto;margin-top:3px;accent-color:var(--err)}
-.log{margin-top:16px;background:#0a0d12;border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;max-height:220px;overflow-y:auto;color:#9fb0c3}
+.log{margin-top:16px;background:#0a0d12;border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-family:'JetBrains Mono',ui-monospace,monospace;font-size:12px;max-height:220px;overflow-y:auto;overflow-wrap:anywhere;word-break:break-word;color:#9fb0c3}
 .log .l{padding:1px 0}
 .log .ok{color:var(--ok)}
 .log .err{color:var(--err)}
@@ -45,6 +48,7 @@ button.ghost{background:var(--panel2);border:1px solid var(--border)}
   <p id="t-intro"></p>
   <div class="meta" id="meta"></div>
   <button id="go"></button>
+  <button id="reset-loc" type="button" class="ghost" style="display:none;margin-top:8px"></button>
   <div class="modes" id="modes">
     <label class="mode danger" id="mode-zero-lbl">
       <input type="radio" name="mode" value="zero">
@@ -61,8 +65,9 @@ button.ghost{background:var(--panel2);border:1px solid var(--border)}
   </div>
   <label class="danger-check" id="danger-check"><input type="checkbox" id="danger-ok"><span id="t-danger"></span></label>
   <button id="apply" style="display:none"></button>
-  <div class="log" id="log"></div>
-  <div class="done" id="done"></div>
+  <div class="log" id="log" role="status" aria-live="polite"></div>
+  <div class="done" id="done" role="status" aria-live="polite"></div>
+  <p style="text-align:center;margin:14px 0 0"><a id="t-guide-link" href="https://github.com/DakinDrago/USBos" target="_blank" rel="noopener noreferrer" style="color:var(--muted);font-size:12px;text-decoration:underline"></a></p>
 </div>
 <script>
 const PAYLOAD = __USBOS_PAYLOAD__;
@@ -114,6 +119,8 @@ const STR = {
     finished: (parts) => `Terminé (${parts}).`,
     tip: 'Astuce : des fichiers config ont changé côté installeur mais les vôtres ont été gardés.',
     error: (m) => 'Erreur : ' + m,
+    reset: 'Changer d’emplacement',
+    guideLink: 'Guide complet et code source sur GitHub',
   },
   en: {
     title: 'USBos Installer',
@@ -160,6 +167,8 @@ const STR = {
     finished: (parts) => `Done (${parts}).`,
     tip: 'Tip: some config files changed on the installer side but yours were kept.',
     error: (m) => 'Error: ' + m,
+    reset: 'Change location',
+    guideLink: 'Full guide and source code on GitHub',
   },
 };
 let lang = 'fr';
@@ -180,6 +189,8 @@ function renderStatic() {
     metaEl.style.display = 'none'; // vieux payload sans meta : rien à afficher
   }
   goBtn.textContent = s('go');
+  resetBtn.textContent = s('reset');
+  document.getElementById('t-guide-link').textContent = s('guideLink');
   document.getElementById('t-zero-t').textContent = s('zeroT');
   document.getElementById('t-zero-d').innerHTML = s('zeroD');
   document.getElementById('t-full-t').textContent = s('fullT');
@@ -196,6 +207,7 @@ document.getElementById('lang-fr').onclick = () => { lang = 'fr'; renderStatic()
 document.getElementById('lang-en').onclick = () => { lang = 'en'; renderStatic(); };
 const logEl = document.getElementById('log');
 const goBtn = document.getElementById('go');
+const resetBtn = document.getElementById('reset-loc');
 const applyBtn = document.getElementById('apply');
 const doneEl = document.getElementById('done');
 const modesEl = document.getElementById('modes');
@@ -373,10 +385,26 @@ goBtn.onclick = async () => {
     if (!installExists) {
       document.querySelector('input[name="mode"][value="zero"]').checked = true;
     }
+    resetBtn.style.display = 'block';
     refreshModeUI();
   } catch (err) {
     log(s('cancelled')(err.message), 'err');
   }
+};
+
+resetBtn.onclick = () => {
+  // Redonne un état "neutre" sans recharger la page : ré-choisir un
+  // emplacement repasse par tout le flux normal (dangerOk, disabled, etc.
+  // sont déjà remis à zéro dans goBtn.onclick pour le nouvel emplacement).
+  pickedParent = null;
+  installExists = false;
+  modesEl.classList.remove('show');
+  applyBtn.style.display = 'none';
+  resetBtn.style.display = 'none';
+  dangerCheck.classList.remove('show');
+  dangerOk.checked = false;
+  doneEl.style.display = 'none';
+  logEl.replaceChildren();
 };
 
 applyBtn.onclick = async () => {

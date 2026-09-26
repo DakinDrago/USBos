@@ -9,6 +9,11 @@ Usage :
     python tools/gen_files_json.py USBos/system --version 2.2.1
     python tools/gen_files_json.py USBos/apps/notes
 
+En pratique, tu n'as presque jamais besoin d'appeler ce script toi-même :
+utilise `python tools/release.py`, qui l'appelle pour tous les composants
+automatiquement. Ce script reste utile pour régénérer UN seul composant
+en isolation (debug, script externe).
+
 Le script écrit (ou met à jour) dans le dossier du composant :
     version.json   { "version": "x.y.z" }  (ou {"kernel": "x.y.z"} pour system)
     files.json     { "files": { "<chemin relatif>": "<sha256 hex>", ... } }
@@ -16,6 +21,14 @@ Le script écrit (ou met à jour) dans le dossier du composant :
 Les chemins sont relatifs à la racine du composant, avec des "/" POSIX.
 version.json et files.json eux-mêmes sont exclus des hash (ils décriraient
 leur propre contenu, ce qui serait instable).
+
+Source de vérité pour la version :
+  - noyau (system/)   -> const KERNEL_VERSION dans kernel.js (system/version.json
+    est un MIROIR, tenu à jour par make_installer.py / tools/release.py).
+  - une app (apps/<id>/) -> le champ "version" de manifest.json. version.json
+    est un miroir généré ici, jamais édité à la main.
+  --version force une valeur explicite (prioritaire sur la source ci-dessus)
+  et resynchronise le fichier source correspondant.
 
 Contrat avec l'updater :
   - composant "system"  -> baseUrl/version.json { "version" }, fichiers
@@ -67,36 +80,42 @@ def sha256_file(path: pathlib.Path) -> str:
     return h.hexdigest()
 
 
-def main(argv: list) -> int:
-    if len(argv) < 1:
-        print(__doc__)
-        return 2
-    comp = pathlib.Path(argv[0])
+def generate(comp: pathlib.Path, version: str = None) -> int:
+    """Régénère version.json + files.json pour UN composant. Retourne 0/1.
+
+    version=None : lit la source de vérité (KERNEL_VERSION déjà répercuté
+    dans system/version.json pour le noyau via sync_versions ; manifest.json
+    pour une app). Passe une valeur explicite pour forcer/bumper.
+    """
     if not comp.is_dir():
         print(f"Erreur : dossier introuvable : {comp}")
         return 1
 
-    version = None
-    rest = argv[1:]
-    i = 0
-    while i < len(rest):
-        a = rest[i]
-        if a.startswith("--version="):
-            version = a.split("=", 1)[1]
-        elif a == "--version" and i + 1 < len(rest):
-            version = rest[i + 1]
-            i += 1
-        i += 1
-
     is_kernel = comp.resolve().name == "system" and comp.parent.name != "apps"
     version_path = comp / "version.json"
+    manifest_path = comp / "manifest.json"
 
     if version is None:
-        try:
-            current = json.loads(version_path.read_text(encoding="utf-8"))
-            version = current.get("kernel" if is_kernel else "version") or current.get("version" if is_kernel else "kernel")
-        except (OSError, ValueError):
-            version = None
+        if is_kernel:
+            # Le noyau n'a pas de manifest.json : sa source de vérité est
+            # KERNEL_VERSION (kernel.js), déjà répercuté dans version.json
+            # par make_installer.sync_versions() avant l'appel à generate().
+            try:
+                version = json.loads(version_path.read_text(encoding="utf-8")).get("kernel")
+            except (OSError, ValueError):
+                version = None
+        else:
+            # Source de vérité d'une app : manifest.json (un seul endroit
+            # à éditer). version.json n'est qu'un miroir généré ici.
+            try:
+                version = json.loads(manifest_path.read_text(encoding="utf-8")).get("version")
+            except (OSError, ValueError):
+                version = None
+            if not version:
+                try:
+                    version = json.loads(version_path.read_text(encoding="utf-8")).get("version")
+                except (OSError, ValueError):
+                    version = None
         if not version:
             print("Erreur : précisez --version x.y.z (aucune version existante trouvée).")
             return 1
@@ -119,13 +138,14 @@ def main(argv: list) -> int:
         atomic_write(version_path, dump_canonical({"kernel": version, "schema": schema, "version": version}))
     else:
         atomic_write(version_path, dump_canonical({"version": version}))
-        # Synchronise manifest.json (affiché dans la sidebar).
-        manifest = comp / "manifest.json"
+        # Synchronise manifest.json (source de vérité normalement déjà à
+        # jour ; ce chemin ne sert qu'avec un --version explicite qui
+        # diverge de ce que contenait manifest.json).
         try:
-            m = json.loads(manifest.read_text(encoding="utf-8"))
+            m = json.loads(manifest_path.read_text(encoding="utf-8"))
             if m.get("version") != version:
                 m["version"] = version
-                atomic_write(manifest, dump_canonical(m))
+                atomic_write(manifest_path, dump_canonical(m))
                 print(f"manifest.json synchronisé à {version}.")
         except (OSError, ValueError) as err:
             print(f"Avertissement : manifest.json non synchronisé ({err}).")
@@ -161,6 +181,27 @@ def main(argv: list) -> int:
     atomic_write(comp / "files.json", dump_canonical({"version": version, "files": files}))
     print(f"{comp} : version {version}, {len(files)} fichier(s) hachés -> files.json.")
     return 0
+
+
+def main(argv: list) -> int:
+    if len(argv) < 1:
+        print(__doc__)
+        return 2
+    comp = pathlib.Path(argv[0])
+
+    version = None
+    rest = argv[1:]
+    i = 0
+    while i < len(rest):
+        a = rest[i]
+        if a.startswith("--version="):
+            version = a.split("=", 1)[1]
+        elif a == "--version" and i + 1 < len(rest):
+            version = rest[i + 1]
+            i += 1
+        i += 1
+
+    return generate(comp, version)
 
 
 if __name__ == "__main__":

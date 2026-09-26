@@ -46,6 +46,13 @@ const STYLE = `
 .mesh-app .btn:hover{filter:brightness(1.1)}
 .mesh-app .mini{background:var(--panel2);border:1px solid var(--border);border-radius:7px;color:var(--text);font-size:12px;padding:6px 11px}
 .mesh-app .mini:hover{border-color:var(--accent)}
+.mesh-app .mini.del{background:rgba(248,81,73,.1);border:1px solid var(--err);color:var(--err)}
+.mesh-app .mini.del:hover{background:rgba(248,81,73,.2)}
+.mesh-app .msg{overflow-wrap:anywhere}
+.mesh-app .peer .n{overflow-wrap:anywhere}
+.mesh-app input[type=file]{color:var(--muted);font-size:12px;max-width:100%}
+.mesh-app input[type=file]::file-selector-button{font:inherit;cursor:pointer;background:var(--panel2);border:1px solid var(--border);border-radius:7px;color:var(--text);padding:6px 11px;margin-right:8px}
+.mesh-app input[type=file]::file-selector-button:hover{border-color:var(--accent)}
 .mesh-app .dropzone{border:1.5px dashed var(--border);border-radius:10px;padding:14px;text-align:center;color:var(--muted);font-size:12.5px}
 .mesh-app .dropzone.drag{border-color:var(--accent);color:var(--accent)}
 .mesh-app .empty{color:var(--muted);font-size:12.5px;text-align:center;padding:14px 0}
