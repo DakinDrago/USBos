@@ -791,7 +791,10 @@
       "ls": "usbos.fs.ls(vpath) — ex. usbos.fs.ls('apps:') ou usbos.fs.ls('data:notes')",
       "stat": "usbos.fs.stat(vpath) — existe ou non.",
       "cat": "usbos.fs.cat(vpath) — lit un fichier texte. Les chemins data: sont déchiffrés si la session est déverrouillée, sinon lecture brute refusée.",
-      "rm": "usbos.fs.rm(vpath, { confirm: true }) — supprime un fichier. Destructif."
+      "rm": "usbos.fs.rm(vpath, { confirm: true }) — supprime un fichier. Destructif.",
+      "write": "usbos.fs.write(vpath, content, force, { confirm: true }) — écrit un fichier texte (créé si absent). Destructif. Pour system:*, config:update-sources.json : force doit être true en plus de confirm.",
+      "writeProtected": "Écriture refusée sur {path} (fichier/dossier système protégé). Ajoute force=true si c'est intentionnel.",
+      "written": "Écrit : {path}"
     },
     "updater": {
       "check": "Vérifie les mises à jour disponibles (ne les applique pas, retourne le plan).",

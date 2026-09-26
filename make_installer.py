@@ -28,7 +28,7 @@ INDEX_HTML = ROOT / "index.html"
 # Le build synchronise version.json ("kernel") et les ?v= d'index.html
 # avant d'embarquer, pour qu'un bump ne puisse plus diverger.
 KERNEL_RE = re.compile(r"const\s+KERNEL_VERSION\s*=\s*['\"]([^'\"]+)['\"]")
-SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$")
+SEMVER_RE = re.compile(r"^\d+(\.\d+)+(-[0-9A-Za-z.-]+)?$")  # x.y, x.y.z, x.y.z.a…
 CACHEBUST_RE = re.compile(r"""((?:src|href)="system/[^"]+?)(?:\?v=[^"]*)?(")""")
 
 # Dossiers jamais écrasés par l'installeur en mode mise à jour
@@ -97,7 +97,7 @@ def read_kernel_version() -> str:
         raise SystemExit("Version introuvable : USBos/system/kernel.js illisible.")
     m = KERNEL_RE.search(src)
     if not m or not SEMVER_RE.match(m.group(1)):
-        raise SystemExit("Version introuvable : const KERNEL_VERSION = 'x.y.z' absente/invalide.")
+        raise SystemExit("Version introuvable : const KERNEL_VERSION = 'x.y[.z…]' absente/invalide.")
     return m.group(1)
 
 

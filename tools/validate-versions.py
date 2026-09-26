@@ -11,7 +11,7 @@ Règles :
   kernel-sync      KERNEL_VERSION == USBos/system/version.json["kernel"]
   index-cachebust  tous les ?v= de USBos/index.html == KERNEL_VERSION
   app-sync         apps/<id>/manifest.json["version"] == apps/<id>/version.json["version"]
-  semver           chaque version lue est au format x.y.z
+  semver           chaque version lue est au format numérique x.y[.z…]
 """
 import hashlib
 import json
@@ -26,7 +26,7 @@ KERNEL_VERSION_JSON = ROOT / "USBos" / "system" / "version.json"
 INDEX_HTML = ROOT / "USBos" / "index.html"
 APPS_DIR = ROOT / "USBos" / "apps"
 
-SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$")
+SEMVER_RE = re.compile(r"^\d+(\.\d+)+(-[0-9A-Za-z.-]+)?$")  # x.y, x.y.z, x.y.z.a…
 KERNEL_RE = re.compile(r"const\s+KERNEL_VERSION\s*=\s*['\"]([^'\"]+)['\"]")
 CACHEBUST_RE = re.compile(r"""(?:src|href)="system/[^"]+?\?v=([^"&\s]+)""")
 

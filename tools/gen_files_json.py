@@ -53,7 +53,7 @@ SKIP_SUFFIXES = (".log", ".tmp", ".bak")
 SKIP_DIRS = {".git", "node_modules", "__pycache__", "dist"}
 SKIP_EXT_SPECIAL = {".pem"}
 REL_RE = re.compile(r"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")
-SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$")
+SEMVER_RE = re.compile(r"^\d+(\.\d+)+(-[0-9A-Za-z.-]+)?$")  # x.y, x.y.z, x.y.z.a…
 MAX_FILE_BYTES = 50 * 1024 * 1024
 
 
@@ -117,11 +117,11 @@ def generate(comp: pathlib.Path, version: str = None) -> int:
                 except (OSError, ValueError):
                     version = None
         if not version:
-            print("Erreur : précisez --version x.y.z (aucune version existante trouvée).")
+            print("Erreur : précisez --version x.y[.z…] (aucune version existante trouvée).")
             return 1
 
     if not SEMVER_RE.match(version):
-        print(f"Erreur : version invalide (semver x.y.z attendu) : {version}")
+        print(f"Erreur : version invalide (format numérique x.y[.z…] attendu) : {version}")
         return 1
 
     # Écritures AVANT hachage : version.json + manifest.json sont mutés ici,

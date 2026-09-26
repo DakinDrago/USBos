@@ -195,6 +195,29 @@ defineCommand('fs', 'rm', {
   destructive: true,
   run: guarded((vpath) => { requireConnected(); return K().state.vfs.remove(vpath); }),
 });
+// Protection dédiée à l'écriture (writeText/writeBinary du VFS n'ont eux-mêmes
+// aucun garde-fou — voir vfs.js — donc c'est ICI que ça compte : c'est le
+// seul chemin d'écriture exposé côté commandes). `force` doit être explicite
+// pour toucher le noyau ou la config de mise à jour : une IA de debug qui
+// écrase system:kernel.js par erreur bloquerait la clé au prochain reboot.
+const FS_WRITE_PROTECTED = ['system:kernel.js', 'system:version.json', 'config:update-sources.json'];
+defineCommand('fs', 'write', {
+  help: 'console.fs.write',
+  destructive: true,
+  run: guarded(async (vpath, content, force) => {
+    requireConnected();
+    const p = String(vpath).normalize('NFC');
+    if (p.startsWith('data:')) requireUnlocked();
+    const protectedPath = p === 'system:' || p.startsWith('system:') || FS_WRITE_PROTECTED.includes(p);
+    if (protectedPath && force !== true) {
+      throw new Error(ct('console.fs.writeProtected', { path: p }));
+    }
+    const text = String(content);
+    await K().state.vfs.writeText(p, text);
+    window.USBosLog.warn('console', `fs.write ${p} (${text.length} caractère(s))${force === true ? ' [force]' : ''}`);
+    return ct('console.fs.written', { path: p });
+  }),
+});
 
 // --------------------------------------------------------------- updater
 defineCommand('updater', 'check', {

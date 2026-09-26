@@ -267,13 +267,25 @@ class VFS {
   async walk(dirVpath, maxFiles = 5000) {
     const out = [];
     const unreadable = [];
-    const queue = [dirVpath.replace(/\/+$/, '')];
+    const root = dirVpath.replace(/\/+$/, '');
+    const queue = [root];
+    let isRoot = true;
     while (queue.length && out.length < maxFiles) {
       const cur = queue.shift();
+      const rootCall = isRoot;
+      isRoot = false;
       let entries;
       try {
         entries = await this.list(cur);
-      } catch {
+      } catch (err) {
+        // Racine absente (ex. update:mig-backup sans migration) : cas normal,
+        // zéro fichier — retour silencieux, sans warn parasite au boot.
+        if (rootCall && err && err.name === 'NotFoundError') return [];
+        // Sous-dossier disparu entre-temps : skip silencieux (debug seul).
+        if (err && err.name === 'NotFoundError') {
+          if (window.USBosLog) window.USBosLog.debug('vfs', `walk : sous-dossier disparu, ignoré : ${cur}`);
+          continue;
+        }
         unreadable.push(cur);
         continue; // dossier illisible -> ignoré, pas d'échec global
       }
@@ -291,7 +303,10 @@ class VFS {
         }
       }
     }
-    if (unreadable.length && window.USBosLog) window.USBosLog.warn('vfs', `walk : ${unreadable.length} entrée(s) illisible(s) ignorée(s)`);
+    if (unreadable.length && window.USBosLog) {
+      window.USBosLog.warn('vfs', `walk : ${unreadable.length} entrée(s) illisible(s) ignorée(s)`);
+      window.USBosLog.debug('vfs', `walk illisible : ${unreadable.join(', ')}`);
+    }
     return out;
   }
 
