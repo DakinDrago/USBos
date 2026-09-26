@@ -1,5 +1,6 @@
 {
-  "kernel": "2.4.0.1",
+  "indexHtml": "664c33a70f72f06eb87c6e58b1436d6a224188ca797b769e10105a44858c0023",
+  "kernel": "2.4.0.2",
   "schema": 1,
-  "version": "2.4.0.1"
+  "version": "2.4.0.2"
 }

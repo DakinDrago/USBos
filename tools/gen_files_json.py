@@ -135,7 +135,19 @@ def generate(comp: pathlib.Path, version: str = None) -> int:
                 schema = exist["schema"]
         except (OSError, ValueError):
             pass
-        atomic_write(version_path, dump_canonical({"kernel": version, "schema": schema, "version": version}))
+        # index.html est un sibling de system/ (racine USBos/), donc hors de
+        # la portée normale du hachage par composant (rglob(comp)) : on
+        # l'épingle explicitement ici pour que l'updater puisse aussi le
+        # mettre à jour (voir root:index.html dans vfs.js / updater.js).
+        # Sans ça, une mise à jour EN PLACE (depuis l'OS, pas l'installeur)
+        # rafraîchit kernel.js mais jamais la balise <script ?v=> qui le
+        # charge — le navigateur sert alors une vieille copie en cache.
+        index_html = comp.parent / "index.html"
+        index_hash = sha256_file(index_html) if index_html.is_file() else None
+        payload = {"kernel": version, "schema": schema, "version": version}
+        if index_hash:
+            payload["indexHtml"] = index_hash
+        atomic_write(version_path, dump_canonical(payload))
     else:
         atomic_write(version_path, dump_canonical({"version": version}))
         # Synchronise manifest.json (source de vérité normalement déjà à

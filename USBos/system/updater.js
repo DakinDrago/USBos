@@ -159,6 +159,9 @@ async function planForSource(vfs, baseUrl, localPrefix, expectDestSegment) {
   if (remoteFiles && remoteFiles.version != null && remoteFiles.version !== remoteVersion.version) {
     throw new Error(`files.json/version.json mismatch (${remoteFiles.version} vs ${remoteVersion.version}) on ${safeBase}`);
   }
+  const indexHtmlHash = (typeof remoteVersion.indexHtml === 'string' && /^[0-9a-f]{64}$/i.test(remoteVersion.indexHtml))
+    ? remoteVersion.indexHtml.toLowerCase()
+    : null;
   const toFetch = [];
   for (const [rawRel, remoteHash] of entryList) {
     const relPath = assertSafeRelPath(rawRel);
@@ -172,7 +175,7 @@ async function planForSource(vfs, baseUrl, localPrefix, expectDestSegment) {
       toFetch.push({ relPath, remoteHash: remoteHash.toLowerCase(), url, localVpath });
     }
   }
-  return { version: remoteVersion.version, toFetch };
+  return { version: remoteVersion.version, toFetch, indexHtmlHash };
 }
 
 async function checkAll(vfs, kernelVersion) {
@@ -201,9 +204,18 @@ async function checkAll(vfs, kernelVersion) {
     try {
       const localVer = await vfs.readJSON('system:version.json').then((v) => v.kernel || v.version).catch(() => kernelVersion);
       const res = await planForSource(vfs, sources.kernel, '', 'system');
+      // index.html est hors de system: (sibling), donc jamais couvert par le
+      // diff de fichiers ci-dessus : on le compare à part, y compris quand
+      // la version du noyau n'a elle-même pas bougé (rattrapage si une clé
+      // a déjà traversé ce trou avant que ce correctif n'existe).
+      let indexNeedsSync = false;
+      if (res.indexHtmlHash) {
+        const localIndexHash = await localFileHash(vfs, 'root:index.html');
+        indexNeedsSync = localIndexHash !== res.indexHtmlHash;
+      }
       if (res.toFetch.length > 0) {
         if (isNewer(res.version, localVer) || res.version === localVer) {
-          plan.kernel = { baseUrl: assertHttps(sources.kernel), version: res.version, toFetch: res.toFetch };
+          plan.kernel = { baseUrl: assertHttps(sources.kernel), version: res.version, toFetch: res.toFetch, indexHtmlHash: res.indexHtmlHash };
           plan.hasUpdates = true;
           parts.push(`noyau ${res.version}`);
         } else {
@@ -212,9 +224,13 @@ async function checkAll(vfs, kernelVersion) {
         }
       } else if (isNewer(res.version, localVer)) {
         // Version bump sans fichiers changés : on met juste à jour le marqueur.
-        plan.kernel = { baseUrl: assertHttps(sources.kernel), version: res.version, toFetch: [] };
+        plan.kernel = { baseUrl: assertHttps(sources.kernel), version: res.version, toFetch: [], indexHtmlHash: res.indexHtmlHash };
         plan.hasUpdates = true;
         parts.push(`noyau ${res.version} (marqueur)`);
+      } else if (indexNeedsSync) {
+        plan.kernel = { baseUrl: assertHttps(sources.kernel), version: res.version, toFetch: [], indexHtmlHash: res.indexHtmlHash };
+        plan.hasUpdates = true;
+        parts.push('index.html (rattrapage)');
       }
     } catch (err) {
       plan.errors.push(`noyau: ${err.message}`);
@@ -357,6 +373,36 @@ async function apply(vfs, plan) {
       await vfs.writeJSON('system:version.json', { ...cur, kernel: plan.kernel.version });
     }
     kernelChanged = hasKernelFiles;
+  }
+
+  // 3bis) index.html : sibling de system/, donc jamais couvert par le diff
+  // par hash ci-dessus (voir vfs.js `root:` / gen_files_json.py). Sans ce
+  // rattrapage, la balise <script kernel.js?v=...> qu'il contient reste
+  // figée à l'ancienne version : le navigateur sert alors kernel.js depuis
+  // son cache HTTP (même URL = pas de re-fetch) même après que le VRAI
+  // fichier ait été mis à jour sur la clé — plantage silencieux et
+  // difficile à diagnostiquer (voir historique du projet). Best-effort :
+  // une erreur ici ne doit jamais faire échouer une mise à jour par
+  // ailleurs réussie ; on retentera au prochain cycle.
+  if (plan.kernel && plan.kernel.indexHtmlHash) {
+    try {
+      const localHash = await localFileHash(vfs, 'root:index.html');
+      if (localHash !== plan.kernel.indexHtmlHash) {
+        const rootBaseUrl = plan.kernel.baseUrl.replace(/\/system\/?$/, '');
+        const buf = await fetchBuffer(`${rootBaseUrl}/index.html`);
+        const hash = await sha256Hex(buf);
+        if (hash !== plan.kernel.indexHtmlHash) {
+          throw new Error(`Bad hash for index.html (integrity failure)`);
+        }
+        await vfs.writeBinary('root:index.html', buf);
+        const verify = await sha256Hex(await vfs.readBinary('root:index.html'));
+        if (verify !== plan.kernel.indexHtmlHash) throw new Error('Post-write check failed for root:index.html');
+        kernelChanged = true; // une nouvelle page = reload requis, même si system/ seul n'a pas bougé
+        if (window.USBosLog) window.USBosLog.info('updater', 'index.html synchronisé (cache-busters à jour).');
+      }
+    } catch (err) {
+      if (window.USBosLog) window.USBosLog.warn('updater', `index.html non synchronisé, réessai au prochain cycle : ${err.message}`);
+    }
   }
 
   for (const [appId, source] of Object.entries(plan.apps || {})) {

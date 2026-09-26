@@ -57,6 +57,7 @@ const SCHEME_TO_DIR = {
   config: 'config',
   update: '.update',
   shared: null, // racine Partage/ (sibling de USBos/), voir _resolveBaseDir
+  root: null,   // racine USBos/ elle-même (ex. root:index.html), voir _resolveBaseDir
 };
 
 class VFSError extends Error {
@@ -105,6 +106,7 @@ class VFS {
       if (!this.sharedRoot) throw new VFSError('shared space unavailable — reconnect via the parent folder.', 'SHARED_UNAVAILABLE');
       return this.sharedRoot;
     }
+    if (scheme === 'root') return this.root; // USBos/ elle-même (ex. index.html)
     const dirName = SCHEME_TO_DIR[scheme];
     if (!dirName) throw new VFSError(`Unknown VFS scheme: ${scheme}`, 'BAD_SCHEME');
     return this.root.getDirectoryHandle(dirName, { create });
@@ -225,7 +227,7 @@ class VFS {
   }
 
   // Fichiers/dossiers protégés : suppression interdite sans { force: true }.
-  static PROTECTED = ['system:kernel.js', 'system:version.json', 'config:update-sources.json', 'system:'];
+  static PROTECTED = ['system:kernel.js', 'system:version.json', 'config:update-sources.json', 'system:', 'root:index.html'];
 
   async remove(vpath, opts = {}) {
     const { force = false } = opts || {};

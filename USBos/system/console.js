@@ -200,7 +200,7 @@ defineCommand('fs', 'rm', {
 // seul chemin d'écriture exposé côté commandes). `force` doit être explicite
 // pour toucher le noyau ou la config de mise à jour : une IA de debug qui
 // écrase system:kernel.js par erreur bloquerait la clé au prochain reboot.
-const FS_WRITE_PROTECTED = ['system:kernel.js', 'system:version.json', 'config:update-sources.json'];
+const FS_WRITE_PROTECTED = ['system:kernel.js', 'system:version.json', 'config:update-sources.json', 'root:index.html'];
 defineCommand('fs', 'write', {
   help: 'console.fs.write',
   destructive: true,
