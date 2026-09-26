@@ -7,7 +7,7 @@
  */
 'use strict';
 
-const KERNEL_VERSION = '2.4.0.2';
+const KERNEL_VERSION = '2.4.0.3';
 const DB_NAME = 'usbos-kernel';
 const DB_STORE = 'handles';
 const DB_KEY = 'root';
@@ -2011,7 +2011,7 @@ function buildSandboxSrcdoc(id, manifest, code) {
   const cspConnect = (Array.isArray(manifest.csp && manifest.csp.connectSrc) && manifest.csp.connectSrc.length)
     ? manifest.csp.connectSrc.map((s) => String(s)).join(' ')
     : "'none'";
-  const csp = `default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; connect-src ${cspConnect}; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';`;
+  const csp = `default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; connect-src ${cspConnect}; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';`;
   return `<!DOCTYPE html><html lang="${appLang}" data-theme="${resolveThemeName()}" data-accent="${currentThemePrefs().accent}" data-radius="${uip.radius}" data-fs="${uip.fs}" data-density="${uip.density}" data-barpos="${uip.barpos}" data-side="${uip.side}"><head><meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
 <style id="usbos-theme">
