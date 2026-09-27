@@ -24,6 +24,11 @@ KERNEL_JS = ROOT / "system" / "kernel.js"
 KERNEL_VERSION_JSON = ROOT / "system" / "version.json"
 INDEX_HTML = ROOT / "index.html"
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, OSError):
+    pass
+
 # Source de vérité unique : KERNEL_VERSION dans system/kernel.js.
 # Le build synchronise version.json ("kernel") et les ?v= d'index.html
 # avant d'embarquer, pour qu'un bump ne puisse plus diverger.

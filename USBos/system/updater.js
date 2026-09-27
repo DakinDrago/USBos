@@ -96,6 +96,10 @@ function assertSafeRelPath(relPath) {
   if (/[<>:"|?*\x00-\x1f]/.test(s)) throw new Error(`Forbidden remote path: ${relPath}`);
   if (/[%#?&;+:]/.test(s)) throw new Error(`Forbidden remote path: ${relPath}`);
   if (/[ .]$/.test(s) || s.split('/').some((p) => /[ .]$/.test(p))) throw new Error(`Forbidden remote path: ${relPath}`);
+  // Liste blanche finale : autoritaire. Les lignes ci-dessus ne couvrent que
+  // ce qu'elle laisse passer (segments "." / ".." et points/espaces finaux
+  // sont valides pour [A-Za-z0-9._-]+). Le reste est refusé deux fois, par
+  // construction — sans coût et sans fork possible entre les deux filtres.
   if (!/^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/.test(s)) throw new Error(`Forbidden remote path: ${relPath}`);
   return s;
 }
@@ -331,7 +335,8 @@ async function apply(vfs, plan) {
     try {
       const orig = await vfs.readBinary(s.localVpath);
       await vfs.writeBinary(toBackup(s.localVpath), orig);
-    } catch { /* absent localement ou illisible : rien à sauvegarder */ }
+      s.hadOriginal = true; // mémorisé : distingue "créé" de "remplacé"
+    } catch { s.hadOriginal = false; /* absent localement : rien à sauvegarder */ }
   }
   const pending = staged.map((s) => s.localVpath);
   try { await vfs.writeJSON('update:journal.json', { started: new Date().toISOString(), applied: [], pending }); } catch { /* noop */ }
@@ -350,16 +355,37 @@ async function apply(vfs, plan) {
     }
   } catch (err) {
     if (window.USBosLog) window.USBosLog.error('updater', `Bascule interrompue après ${applied.length}/${staged.length} fichiers : ${err.message}`);
+    // Rollback : un fichier PRÉEXISTANT est restauré depuis la sauvegarde ;
+    // un fichier CRÉÉ par la mise à jour (rien à restaurer) est SUPPRIMÉ,
+    // sinon la version cassée reste sur la clé. Les deux cas sont distincts :
+    // compter le second comme un échec gonfrait le compteur d'incident.
+    let restored = 0;
+    let removed = 0;
     let rollbackFailures = 0;
-    for (const vpath of applied) {
-      try {
-        const bak = await vfs.readBinary(toBackup(vpath));
-        await vfs.writeBinary(vpath, bak);
-      } catch { rollbackFailures++; }
+    for (const s of staged) {
+      if (!applied.includes(s.localVpath)) continue;
+      if (s.hadOriginal) {
+        try {
+          const bak = await vfs.readBinary(toBackup(s.localVpath));
+          await vfs.writeBinary(s.localVpath, bak);
+          restored++;
+        } catch { rollbackFailures++; }
+      } else {
+        try { await vfs.remove(s.localVpath, { force: true }); removed++; }
+        catch { rollbackFailures++; }
+      }
     }
     if (rollbackFailures && window.USBosLog) window.USBosLog.error('updater', `Rollback partiel : ${rollbackFailures} fichier(s) non restaurés`);
+    if (window.USBosLog) window.USBosLog.warn('updater', `Rollback : ${restored} restauré(s), ${removed} créé(s) supprimé(s).`);
     // Staging conservé pour retry (pas de clear ici).
-    throw new Error(`Update aborted (${applied.length}/${staged.length} applied): ${err.message}`);
+    throw new Error(`Update aborted (${applied.length}/${staged.length} applied, ${rollbackFailures} rollback failure(s)): ${err.message}`);
+  }
+
+  // Bascule OK : le dossier de sauvegarde n'est plus utile. Sans cette purge,
+  // update:backup/ accumulait une copie complète du système à CHAQUE update
+  // (croissance illimitée de la clé, ~1 Mo par release).
+  try { await vfs.clearDir('update:backup'); } catch (err) {
+    if (window.USBosLog) window.USBosLog.warn('updater', `Purge des sauvegardes incomplète : ${err && err.message}`);
   }
 
   try { await vfs.clearDir('update:staging', true); } catch { /* noop */ }

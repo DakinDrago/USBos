@@ -2,6 +2,12 @@
  * Rules recap (see ../contract.md): classic script, top-level `return`
  * at the end; CSS variables only; no prompt()/confirm(); clean up in
  * unmount(); data: is yours, shared: is public plaintext.
+ *
+ * i18n: this file still hardcodes its strings in English below as a
+ * minimal starting point — replace them with ctx.i18n.t('my-app.key')
+ * calls and put the real FR/EN text in lang/fr.json / lang/en.json
+ * (flat, no "my-app." wrapper needed there — the file IS your
+ * namespace). Rename the "my-app" id everywhere, including here.
  */
 const STATE_FILE = 'state.json';
 

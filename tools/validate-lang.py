@@ -7,7 +7,8 @@ Usage :  python tools/validate-lang.py
 Exit 0 only if no FAIL (warnings are advisory).
 
 Règles :
-  dicts-valid      fr.json / en.json lisibles, clés symétriques
+  dicts-valid      fr.json / en.json (noyau + chaque app) lisibles, clés symétriques
+  app-owns-lang    chaque apps/<id>/ a bien lang/fr.json ET lang/en.json
   dict-plurals     les objets {one, other} sont complets des deux côtés
   params-shape     les {placeholders} des dicts sont des identifiants simples
   keys-used        chaque t()/tp()/bt()/tx('chemin') du runtime existe dans en.json
@@ -23,6 +24,7 @@ import sys
 
 ROOT = pathlib.Path(__file__).parent.parent
 LANG_DIR = ROOT / "USBos" / "system" / "lang"
+APPS_DIR = ROOT / "USBos" / "apps"
 JS_FILES = [
     ROOT / "USBos" / "system" / "kernel.js",
     ROOT / "USBos" / "system" / "console.js",
@@ -81,10 +83,26 @@ def decode_js_string(raw):
     return "".join(out)
 
 
+def load_dicts():
+    """fr/en du noyau (shell, console) + le namespace propre de chaque app
+    (apps/<id>/lang/{fr,en}.json), fusionnés sous leur clé d'app — chaque app
+    porte ses traductions depuis USBos v2.4.1, le noyau ne garde que le
+    générique. Le reste du script traite ce résultat comme un seul arbre,
+    exactement comme avant l'éclatement."""
+    fr = json.loads((LANG_DIR / "fr.json").read_text(encoding="utf-8"))
+    en = json.loads((LANG_DIR / "en.json").read_text(encoding="utf-8"))
+    for app_dir in sorted(p for p in APPS_DIR.glob("*") if p.is_dir()):
+        app_id = app_dir.name
+        for code, target in (("fr", fr), ("en", en)):
+            p = app_dir / "lang" / f"{code}.json"
+            if p.is_file():
+                target[app_id] = json.loads(p.read_text(encoding="utf-8"))
+    return fr, en
+
+
 def main():
     try:
-        fr = json.loads((LANG_DIR / "fr.json").read_text(encoding="utf-8"))
-        en = json.loads((LANG_DIR / "en.json").read_text(encoding="utf-8"))
+        fr, en = load_dicts()
     except (OSError, ValueError) as err:
         check("dicts-valid", False, f"unreadable: {err}")
         return report()
@@ -94,6 +112,15 @@ def main():
     check("dicts-valid", fr_keys == en_keys,
           "" if fr_keys == en_keys else
           f"missing in en: {sorted(fr_keys - en_keys)[:8]} / missing in fr: {sorted(en_keys - fr_keys)[:8]}")
+
+    # ---- chaque app porte ses lang/fr.json + lang/en.json ----
+    missing_app_lang = []
+    for app_dir in sorted(p for p in APPS_DIR.glob("*") if p.is_dir()):
+        for code in ("fr", "en"):
+            if not (app_dir / "lang" / f"{code}.json").is_file():
+                missing_app_lang.append(f"{app_dir.name}/lang/{code}.json")
+    check("app-owns-lang", not missing_app_lang,
+          "" if not missing_app_lang else f"missing: {missing_app_lang}")
 
     # ---- pluriels : mêmes formes des deux côtés ----
     bad = []

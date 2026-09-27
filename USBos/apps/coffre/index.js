@@ -59,6 +59,12 @@ async function deriveKey(passphrase, saltBytes) {
   );
 }
 
+// Plafond du coffre, en CLAIR sérialisé. Le noyau accepte 64 Mo en
+// data:coffre/, mais on reste bien en dessous : c'est un coffre, il ne
+// devrait pas approcher cette taille, et le double chiffrement
+// (coffre + noyau) double la mémoire vive à l'écriture.
+const MAX_VAULT_BYTES = 25 * 1024 * 1024;
+
 async function encryptJSON(key, obj) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const data = new TextEncoder().encode(JSON.stringify(obj));
@@ -133,10 +139,22 @@ const USBosApp = {
             entries = await decryptJSON(key, buf);
             if (!Array.isArray(entries)) throw new Error('corrompu');
           }
+          // Sanitisation entrée par entrée : alone, `Array.isArray` ne
+          // protège pas d'un élément null / sans password, et l'affichage
+          // plantait ensuite sur `e.name`.
+          entries = entries
+            .filter((e) => e && typeof e === 'object')
+            .map((e) => ({
+              id: String(e.id || newId()),
+              name: String(e.name || '').slice(0, 200),
+              login: String(e.login || '').slice(0, 200),
+              password: String(e.password || '').slice(0, 2000),
+              note: String(e.note || '').slice(0, 2000),
+            }));
           unlockBox.innerHTML = '';
           renderVault(key, entries);
         } catch (err) {
-          ctx.ui.log(`coffre: échec de déverrouillage (${err.message})`, 'e');
+          ctx.ui.log(`coffre: échec de déverrouillage (${err.message})`, 'error');
           notice.textContent = t('coffre.badPass');
           notice.hidden = false;
         } finally {
@@ -158,20 +176,25 @@ const USBosApp = {
 
       async function persist() {
         try {
-          const buf = await encryptJSON(key, entries);
-          if (buf.byteLength > 25 * 1024 * 1024) {
+          // Contrôle de taille AVANT de chiffrer : l'ancien ordre encryptait
+          // (JSON.stringify + AES-GCM complet) puis refusait, et comparait le
+          // CHIFFRÉ (25 Mo) au plafond du noyau (64 Mo) — deux seuils sans
+          // rapport. On refuse donc sur le clair sérialisé.
+          const raw = new TextEncoder().encode(JSON.stringify(entries)).length;
+          if (raw > MAX_VAULT_BYTES) {
             const _msg = t('coffre.tooBig');
             saved.textContent = _msg;
             try { ctx.ui.toast(_msg); } catch { /* noop */ }
-            ctx.ui.log('coffre: quota 25 Mo dépassé, persist refusé');
+            ctx.ui.log('coffre: quota 25 Mo dépassé (clair), persist refusé', 'warn');
             return;
           }
+          const buf = await encryptJSON(key, entries);
           await ctx.fs.writeBinary(VAULT_FILE, buf);
           saved.textContent = tp('coffre.savedAt', entries.length, { time: new Date().toLocaleTimeString(locale) });
           ctx.ui.log('coffre: coffre.bin réécrit (chiffré)');
         } catch (err) {
           saved.textContent = t('coffre.saveFailed', { error: err.message });
-          ctx.ui.log('coffre: échec persist (' + err.message + ')');
+          ctx.ui.log('coffre: échec persist (' + err.message + ')', 'error');
         }
       }
 
@@ -283,19 +306,36 @@ const USBosApp = {
             showTimer = setTimeout(() => { pwdVal.textContent = '••••••••'; showBtn.textContent = '👁'; showTimers.delete(showTimer); showTimer = null; }, 30000);
             showTimers.add(showTimer);
           };
-          const copyBtn = el('button', 'mini', t('toolbox.copy'));
+          const copyBtn = el('button', 'mini', t('coffre.copy'));
           copyBtn.onclick = async () => {
             const v = e.password || '';
+            // Repli dans l'app elle-même : le contrat interdit de toucher au
+            // document parent, or le textarea était appendu à document.body.
+            const host = card;
             try {
               if (navigator.clipboard && window.isSecureContext !== false) {
                 await navigator.clipboard.writeText(v);
               } else {
                 const ta = document.createElement('textarea');
-                ta.value = v; document.body.append(ta); ta.select();
-                document.execCommand('copy'); ta.remove();
+                ta.value = v; ta.setAttribute('aria-hidden', 'true');
+                ta.style.cssText = 'position:absolute;left:-9999px;opacity:0';
+                host.append(ta); ta.select();
+                let ok = false;
+                try { ok = document.execCommand('copy'); } catch { ok = false; }
+                ta.remove();
+                if (!ok) throw new Error('execCommand');
               }
-              copyBtn.textContent = t('toolbox.copied'); setTimeout(() => { copyBtn.textContent = t('toolbox.copy'); }, 1200);
-            } catch { copyBtn.textContent = t('toolbox.copyFailed'); }
+              copyBtn.textContent = t('coffre.copied');
+              // Timer suivi : sinon il survit au lock/unmount et écrit dans
+              // un noeud détaché.
+              const tm = setTimeout(() => {
+                copyBtn.textContent = t('coffre.copy');
+                showTimers.delete(tm);
+              }, 1200);
+              showTimers.add(tm);
+            } catch {
+              copyBtn.textContent = t('coffre.copyFailed');
+            }
           };
           kvPwd.append(el('span', 'k', t('coffre.pwdLabel')), pwdVal, showBtn, copyBtn);
           card.append(kvLogin, kvPwd);
@@ -326,7 +366,16 @@ const USBosApp = {
       renderList();
     }
 
-    renderUnlock();
+    // renderUnlock() est async et son premier await est un exists() : appelé
+    // nu, tout rejet (timeout RPC 30 s, VFS, permission) devenait une
+    // promesse non gérée et l'app restait figée sur son titre, sans formulaire
+    // ni message d'erreur.
+    renderUnlock().catch((err) => {
+      ctx.ui.log(`coffre: écran de déverrouillage impossible (${err.message})`, 'error');
+      try { ctx.ui.toast(t('coffre.unlockUnavailable')); } catch { /* noop */ }
+      unlockBox.innerHTML = '';
+      unlockBox.append(el('div', 'notice', t('coffre.unlockUnavailable')));
+    });
   },
   async unmount() { if (this && this._coffreCleanup) { try { await this._coffreCleanup(); } catch { /* noop */ } this._coffreCleanup = null; } },
 }

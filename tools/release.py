@@ -31,6 +31,11 @@ ROOT = pathlib.Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))          # pour importer make_installer
 sys.path.insert(0, str(ROOT / "tools"))  # pour importer gen_files_json
 
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, OSError):
+    pass
+
 import make_installer     # noqa: E402
 import gen_files_json      # noqa: E402
 

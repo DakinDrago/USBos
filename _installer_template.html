@@ -238,6 +238,15 @@ function planInstall(entries, hashes, mode, local) {
   // Dossiers préservés lus du payload (défaut data+config, cf. make_installer.py
   // PRESERVE_ON_UPDATE) : jamais écrasés en full/diff. La distinction
   // skip-data vs skip-config est gardée (comptes et tip config distincts).
+  //
+  // config/ : un fichier DÉJÀ présent et MODIFIÉ localement n'est jamais
+  // écrasé (préférence utilisateur : thème, langue, fonds, sources de MAJ).
+  // En revanche un fichier config IDENTIQUE au payload n'a rien à
+  // protéger : le réécrire est sans risque et permet de faire remonter les
+  // AJOUTS de configuration d'une nouvelle version, qu'aucune
+  // installation existante ne recevait autrement. C'est le compromis qui
+  // manquait entre « ne jamais écraser config/ » et « ne jamais livrer les
+  // nouveaux fichiers de config ».
   const PRESERVE = new Set(PAYLOAD.preserveOnUpdate || ['data', 'config']);
   const out = [];
   for (const relPath of entries) {
@@ -246,14 +255,20 @@ function planInstall(entries, hashes, mode, local) {
     if (mode === 'zero' || mode === 'fresh') { out.push({ relPath, action: 'write' }); continue; }
     // Les autres modes ne touchent jamais aux données utilisateur.
     if (topDir === 'data') { out.push({ relPath, action: 'skip-data' }); continue; }
+    const payloadHash = (hashes[relPath] || '').toLowerCase();
+    const localHash = local[relPath];
+    const configUnchanged = topDir === 'config' && PRESERVE.has('config')
+      && localHash != null && localHash === payloadHash;
     if (mode === 'full') {
+      if (configUnchanged) { out.push({ relPath, action: 'identical' }); continue; }
       if (PRESERVE.has('config') && topDir === 'config' && local[relPath] != null) { out.push({ relPath, action: 'skip-config' }); continue; }
       out.push({ relPath, action: topDir === 'config' ? 'added' : 'write' });
       continue;
     }
     // mode 'diff'
     if (local[relPath] == null) { out.push({ relPath, action: 'added' }); continue; }
-    if (local[relPath] !== (hashes[relPath] || '').toLowerCase()) {
+    if (configUnchanged) { out.push({ relPath, action: 'identical' }); continue; }
+    if (local[relPath] !== payloadHash) {
       if (PRESERVE.has('config') && topDir === 'config') { out.push({ relPath, action: 'skip-config' }); continue; }
       out.push({ relPath, action: 'updated' });
       continue;

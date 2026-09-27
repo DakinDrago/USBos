@@ -1,5 +1,9 @@
 /* USBos app: notes — porté depuis le module original, adapté au contrat v2 (ctx.fs, mount/unmount). */
 const STATE_FILE = 'notes.json';
+// Plafond d'export texte : le noyau refuse au-delà de 2 Mo par écriture
+// shared (pont RPC). Constant nommé pour que le message et le contrôle
+// d'accordent, et plus de langue devinée sur ctx.i18n.locale.
+const MAX_EXPORT_BYTES = 2 * 1024 * 1024;
 
 const STYLE = `
 .notes-app{width:100%;flex:1;min-height:0}
@@ -53,7 +57,16 @@ const USBosApp = {
     const locale = ctx.i18n.locale;
 
     let notes = [];
-    try { notes = await ctx.fs.readJSON(STATE_FILE); } catch { /* fichier absent au premier lancement */ }
+    // Une lecture qui ÉCHOUE n'est pas un premier lancement : les écritures
+    // VFS ne sont pas atomiques, donc une clé retirée en cours de session ou
+    // une erreur d'E/S laissent un fichier tronqué. Tomber sur [] affichait
+    // une liste vide puis le save suivant ÉCRASSAIT les vraies notes.
+    let loadError = null;
+    try { notes = await ctx.fs.readJSON(STATE_FILE); }
+    catch (err) {
+      if (err && err.name === 'NotFoundError') notes = [];
+      else { loadError = err; ctx.ui.log(`notes: lecture impossible (${err.message}) — écriture bloquée`, 'error'); }
+    }
     if (!Array.isArray(notes)) notes = [];
     let editingId = null;
     let draftDirty = false;
@@ -68,6 +81,11 @@ const USBosApp = {
     const list = el('div', 'list');
 
     async function persist() {
+      if (loadError) {
+        // On refuse d'écrire par-dessus un fichier qu'on n'a pas su lire.
+        saved.textContent = t('notes.loadFailed', { error: loadError.message });
+        return;
+      }
       try {
         await ctx.fs.writeJSON(STATE_FILE, notes);
         saved.textContent = t('notes.savedAt', { time: new Date().toLocaleTimeString(locale) });
@@ -104,6 +122,9 @@ const USBosApp = {
         edit.onclick = () => {
           editingId = n.id; titleIn.value = n.title; bodyIn.value = n.body;
           saveBtn.textContent = t('notes.update'); bodyIn.focus();
+          // Le compteur suit l'ouverture : il affichait encore la longueur de
+          // la note précédente (il n'était rafraîchi que sur 'input').
+          count.textContent = tp('notes.countChars', bodyIn.value.length);
           draftDirty = false; clearTimeout(draftTimer);
         };
         const del = el('button', 'mini del', t('notes.delete'));
@@ -139,13 +160,22 @@ const USBosApp = {
         notes.unshift({ id: newId(), title, body, created: Date.now() });
       }
       titleIn.value = ''; bodyIn.value = '';
+      count.textContent = tp('notes.countChars', 0);
       draftDirty = false; clearTimeout(draftTimer);
       await persist(); renderList();
     };
 
     const markDraftDirty = () => {
+      // `draftDirty` passe à true IMMÉDIATEMENT : avant, il n'était posé
+      // qu'après 500 ms de debounce, et l'unmount faisait clearTimeout() ->
+      // sortir de l'app dans la fenêtre perdait la dernière frappe (le
+      // auto-save voyait draftDirty === false). Le debounce ne sert plus
+      // qu'à ne pas re-persister à chaque frappe.
+      draftDirty = true;
       clearTimeout(draftTimer);
-      draftTimer = setTimeout(() => { draftDirty = true; }, 500);
+      draftTimer = setTimeout(() => {
+        if (draftDirty && editingId != null) { void persist(); }
+      }, 1500);
     };
     titleIn.addEventListener('input', markDraftDirty);
     bodyIn.addEventListener('input', () => { count.textContent = tp('notes.countChars', bodyIn.value.length); markDraftDirty(); });
@@ -181,15 +211,19 @@ const USBosApp = {
         const content = kind === 'json'
           ? JSON.stringify(notes, null, 2)
           : notes.map((n) => `# ${n.title || t('notes.untitled')}\n\n${n.body || ''}`).join('\n\n---\n\n');
-        if (new TextEncoder().encode(content).length > 2 * 1024 * 1024) {
-          saved.textContent = t('notes.exportFailed', { error: String(locale || '').toLowerCase().startsWith('en') ? '2 MB max' : '2 Mo max' });
-          ctx.ui.log('notes: export refusé (>2 Mo)');
+        if (new TextEncoder().encode(content).length > MAX_EXPORT_BYTES) {
+          saved.textContent = t('notes.exportFailed', { error: t('notes.maxSize', { max: Math.round(MAX_EXPORT_BYTES / (1024 * 1024)) }) });
+          ctx.ui.log('notes: export refusé (>2 Mo)', 'warn');
           return;
         }
-        await ctx.fs.writeSharedText(name, content);
-        saved.textContent = t('notes.exportedTo', { name });
-        ctx.ui.log(`notes: export ${name}`);
-        ctx.ui.toast(t('notes.exportedToast', { name }));
+        // Partage/ est l'espace d'échange : jamais d'écrasement, on suffixe.
+        let dest = name;
+        let k = 2;
+        while (await ctx.fs.existsShared(dest)) dest = `notes-${todayStamp()}-${k++}.${kind}`;
+        await ctx.fs.writeSharedText(dest, content);
+        saved.textContent = t('notes.exportedTo', { name: dest });
+        ctx.ui.log(`notes: export ${dest}`);
+        ctx.ui.toast(t('notes.exportedToast', { name: dest }));
       } catch (err) {
         saved.textContent = t('notes.exportFailed', { error: err.message });
       }
@@ -236,17 +270,29 @@ const USBosApp = {
               ctx.ui.toast(t('notes.importFailed', { error: String(f.name || '') }));
               return;
             }
+            // Budget d'import : 5000 notes × 100 000 caractères = ~500 Mo de
+            // chaînes en RAM, et le writeJSON suivant butait sur le plafond de
+            // 2 Mo du noyau — la liste en mémoire était alors déconnectée du
+            // disque (UI trompeuse, tous les saves suivants en échec).
+            const MAX_IMPORT_NOTES = 500;
+            const MAX_IMPORT_BODY = 20000;
             const ids = new Set(notes.map((n) => n.id));
             const clean = [];
-            for (const it of arr.slice(0, 5000)) {
+            let skipped = 0;
+            let totalBody = 0;
+            for (const it of arr) {
+              if (clean.length >= MAX_IMPORT_NOTES) { skipped++; continue; }
               if (!it || typeof it !== 'object') continue;
+              const body = String(it.body || '').slice(0, MAX_IMPORT_BODY);
+              if (totalBody + body.length > 1.5 * 1024 * 1024) { skipped++; continue; }
+              totalBody += body.length;
               let id = String(it.id || newId());
               if (ids.has(id)) id = newId();
               ids.add(id);
               clean.push({
                 id,
                 title: String(it.title || '').slice(0, 200),
-                body: String(it.body || '').slice(0, 100000),
+                body,
                 created: Number(it.created) || Date.now(),
               });
             }
@@ -259,6 +305,12 @@ const USBosApp = {
             await persist(); renderList();
             saved.textContent = t('notes.imported', { name: String(f.name || ''), n: clean.length });
             ctx.ui.toast(t('notes.imported', { name: String(f.name || ''), n: clean.length }));
+            if (skipped) {
+              // La troncature doit être visible : sinon l'utilisateur croit
+              // avoir importé le fichier entier.
+              ctx.ui.log(`notes: ${skipped} entrée(s) ignorée(s) (quota d'import)`, 'warn');
+              saved.textContent = `${saved.textContent} · ${tp('notes.importSkipped', skipped)}`;
+            }
             ctx.ui.log(`notes: import ${f.name} (${clean.length})`);
           } catch (err) {
             saved.textContent = t('notes.importFailed', { error: err.message });

@@ -78,9 +78,13 @@ return USBosApp;                     // top-level return: legal, code runs via n
   frozen at mount. **Every user-visible string** goes through
   `t('<id>.<key>')` (params `{name}`), plurals through `tp()` with
   `{one, other}` dict entries, dates through `Intl` +
-  `ctx.i18n.locale`. Add FR + EN entries under your `<id>` namespace in
-  `USBos/system/lang/fr.json` / `en.json` (symmetric, validated).
-  `shell.*` keys are also available (shared errors). Logs stay French.
+  `ctx.i18n.locale`. Your app owns its own translations: put FR + EN
+  entries (flat, no `<id>` wrapper — the file IS your namespace) in
+  `apps/<id>/lang/fr.json` / `lang/en.json`, symmetric, validated by
+  `tools/validate-lang.py` (`app-owns-lang`, `dicts-valid`,
+  `keys-used`). The kernel no longer carries any app's strings —
+  `USBos/system/lang/*.json` only holds `shell.*` (shared errors,
+  also available to you) and `console.*`. Logs stay French.
 
 ## Sandbox & CSP (what you live with)
 

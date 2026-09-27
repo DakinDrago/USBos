@@ -64,6 +64,17 @@ def main(argv):
     except (OSError, ValueError) as err:
         check("version-sync", False, f"unreadable: {err}")
 
+    # ---- lang/fr.json + lang/en.json : chaque app porte ses traductions ----
+    for code in ("fr", "en"):
+        p = root / "lang" / f"{code}.json"
+        try:
+            json.loads(p.read_text(encoding="utf-8"))
+            check(f"lang-{code}", True, "")
+        except OSError:
+            check(f"lang-{code}", False, f"missing: {p}")
+        except ValueError as err:
+            check(f"lang-{code}", False, f"invalid JSON: {err}")
+
     # ---- index.js static checks ----
     entry = manifest.get("entry", "index.js") if manifest_ok else "index.js"
     code_path = root / entry

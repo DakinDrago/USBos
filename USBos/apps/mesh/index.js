@@ -107,7 +107,18 @@ const MAX_ACK_RETRIES = 9; // couvre la fenêtre d'acceptation manuelle (60 s)
 const TRANSFER_TIMEOUT_MS = 120000;
 const MAX_CHAT_MSGS = 50;
 const MAX_EARLY_QUEUE = 20;
+// Garde-fous mémoire (un pair est du code distant) :
+// - transferts entrants simultanés : au-delà, on refuse l'annonce ;
+// - budget global d'octets en cours de réception, tous transferts confondus ;
+//   sans lui, un pair pouvait allouer MAX_PIECES × PIECE_BYTES = 1 Go.
+// - budget d'octets pour la file d'attente pré-acceptation.
+const MAX_CONCURRENT_RECV = 3;
+const MAX_RECV_TOTAL_BYTES = 512 * 1024 * 1024;
+const MAX_EARLY_QUEUE_BYTES = 32 * 1024 * 1024;
 const MAX_ADVERT_MEMBERS = 50;
+// Cibles par envoi (texte ou fichier) : le fichier est cloné une fois PAR
+// cible (structured clone), donc N cibles = N copies en RAM.
+const MAX_SEND_TARGETS = 12;
 const TARGET_RE = /^[A-Z]{3}-\d{6}$/;
 const GROUP_RE = /^GRP-\d{6}$/;
 let meshCleanup = null;
@@ -142,12 +153,34 @@ const USBosApp = {
     const t = ctx.i18n.t;
 
     let cfg = {};
-    try { cfg = await ctx.fs.readJSON(CONFIG_FILE); } catch { /* premier lancement */ }
+    // Lecture ratée != premier lancement. Le VFS n'écrit pas de façon
+    // atomique : une clé retirée, une panne d'E/S ou un fichier tronqué
+    // faisaient repartir d'un cfg vide, et le saveCfg() initial Régénérait
+    // myId ET effaçait TOUTES les salles, sans un mot.
+    let cfgLoadError = null;
+    try { cfg = await ctx.fs.readJSON(CONFIG_FILE); }
+    catch (err) {
+      if (err && err.name === 'NotFoundError') cfg = {};
+      else { cfgLoadError = err; cfg = {}; ctx.ui.log(`mesh: configuration illisible (${err.message}) — enregistrement désactivé`, 'error'); }
+    }
+    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) cfg = {};
     if (!cfg.myId) cfg.myId = shortId();
     if (ctx.keyId && cfg.keyId !== ctx.keyId) cfg.keyId = ctx.keyId; // identité de clé (socle auth/appairage futur)
-    if (!cfg.knownKeys || typeof cfg.knownKeys !== 'object') cfg.knownKeys = {}; // carnet futur : keyId -> {alias, trusted}
     if (!cfg.groups || typeof cfg.groups !== 'object' || Array.isArray(cfg.groups)) cfg.groups = {}; // salons rejoints : code -> {name}
-    async function saveCfg() { try { await ctx.fs.writeJSON(CONFIG_FILE, cfg); } catch { /* best effort */ } }
+    // Échec de SAUVEGARDE visible : sans cela, « salon créé » s'affichait
+    // alors que rien n'atteignait la clé (et disparaissait au redémarrage).
+    async function saveCfg() {
+      if (cfgLoadError) {
+        ctx.ui.log('mesh: écriture de la configuration bloquée (lecture initiale en échec)', 'error');
+        return false;
+      }
+      try { await ctx.fs.writeJSON(CONFIG_FILE, cfg); return true; }
+      catch (err) {
+        ctx.ui.log(`mesh: configuration NON enregistrée (${err.message})`, 'error');
+        try { ctx.ui.toast(t('mesh.saveFailed')); } catch { /* noop */ }
+        return false;
+      }
+    }
     await saveCfg();
 
     const wrap = el('div', 'mesh-app');
@@ -204,12 +237,27 @@ const USBosApp = {
     const blobUrls = new Set();
     const peerGroups = new Map(); // peerId -> { groupCode: {name, members:[...]} } (annoncé)
     const groupMembers = new Map(); // groupCode -> Map peerCode -> true (membres connus, hors soi)
-    const earlyQueue = new Map(); // peerId -> [payload] reçus avant acceptation
+    const earlyQueue = new Map(); // peerId -> {items:[payload], bytes:n} reçus avant acceptation
     const invites = new Map(); // `${group}:${from}` -> {group, name, from}
     const peerCaps = new Map(); // peerId -> true si transferts morcelés supportés
     const sendTransfers = new Map(); // id -> {name,size,mime,n,piece,hashes,group,file,peers:Map,row}
-    const recvTransfers = new Map(); // id -> {name,size,mime,n,piece,hashes,group,from,parts,received,timer,row}
+    const recvTransfers = new Map(); // id -> {name,size,mime,n,piece,hashes,group,from,parts,received,inFlight,timer,row}
     const doneAcks = new Map(); // id -> {peer} : transferts reçus (renvoie packDone 60 s)
+    const doneAckTimers = new Set(); // timers de purge des doneAcks (nettoyés à l'unmount)
+    let recvReservedBytes = 0; // octets réservés par les transferts en cours (budget global)
+    // Levé par meshCleanup. ensurePeer() n'est PAS attendu au montage (la
+    // connexion passive doit rester rapide) : sans ce drapeau, une ouverture
+    // encore en vol assignait `peer` APRÈS le nettoyage, laissant un Peer et
+    // son WebSocket vivants dans une iframe détruite, avec des handlers
+    // écrivant dans un DOM détaché.
+    let disposed = false;
+
+    /** Libère le budget mémoire d'un transfert (terminé ou avorté). */
+    function releaseRecvBudget(st) {
+      if (!st || st.budgetReleased) return;
+      st.budgetReleased = true;
+      recvReservedBytes = Math.max(0, recvReservedBytes - (st.size || 0));
+    }
 
     function setStatus(text, cls) {
       status.querySelector('span:first-child').className = 'dot' + (cls ? ' ' + cls : '');
@@ -252,11 +300,33 @@ const USBosApp = {
       return true;
     }
 
+    /** Poids approximatif d'un payload en file d'attente (octets). */
+    function earlyPayloadBytes(payload) {
+      if (!payload || typeof payload !== 'object') return 0;
+      const d = payload.data;
+      if (d && typeof d === 'object') return d.byteLength || d.size || 0;
+      return JSON.stringify(payload).length;
+    }
+
+    /** Un pair qui envoie `group` doit être membre de CE salon, pas seulement
+     *  moi : l'ancien test (`cfg.groups[g]`) laissait n'importe quel pair
+     *  injecter des messages dans un salon qu'il n'a pas rejoint. */
+    function groupAllowed(g, peerId) {
+      if (!g) return true;
+      if (!cfg.groups[g]) return false;
+      const m = groupMembers.get(g);
+      return !!(m && m.has(peerId));
+    }
+
     function removePeerEverywhere(peerId, render) {
       conns.delete(peerId);
       dialing.delete(peerId);
       peerGroups.delete(peerId);
       earlyQueue.delete(peerId);
+      // peerCaps doit suivre la connexion : sans ça la Map grossit à chaque
+      // aller-retour et "sendFile" décide du mode (moderne/legacy) sur une
+      // capacité d'un pair qui n'est plus là.
+      peerCaps.delete(peerId);
       for (const m of groupMembers.values()) m.delete(peerId);
       if (render !== false) { renderPeers(); renderGroups(); updateSendEnabled(); }
     }
@@ -553,18 +623,33 @@ const USBosApp = {
       if (!Number.isInteger(meta.size) || meta.size <= 0 || meta.size > MAX_PACK_BYTES) return null;
       if (!Number.isInteger(meta.piece) || meta.piece <= 0 || meta.piece > PIECE_BYTES) return null;
       if (!Array.isArray(meta.hashes) || meta.hashes.length !== meta.n) return null;
+      // Cohérence de l'annonce : n × piece doit couvrir size, sans quoi un
+      // pair peut annoncer 1 morceau et faire allouer n × piece Octets.
+      if (meta.n * meta.piece < meta.size) return null;
       const g = meta.group != null ? String(meta.group) : null;
       if (g && !cfg.groups[g]) return null; // pas notre salon
       const existing = recvTransfers.get(meta.id);
       if (existing) return { st: existing, created: false };
+      // Budget mémoire : nombre de transferts simultanés ET octets reserved
+      // au total. Un pair unique pouvait épuiser la RAM de l'onglet.
+      if (recvTransfers.size >= MAX_CONCURRENT_RECV) {
+        ctx.ui.log(`mesh: transfert refusé (${recvTransfers.size} transferts simultanés, max ${MAX_CONCURRENT_RECV})`);
+        return null;
+      }
+      if (recvReservedBytes + meta.size > MAX_RECV_TOTAL_BYTES) {
+        ctx.ui.log('mesh: transfert refusé (budget mémoire entrant atteint)');
+        return null;
+      }
       const row = makeProgressRow(t('mesh.packReceiving', { name: String(meta.name).slice(0, 60) }), () => abortRecv(meta.id, true));
       const st = {
         id: meta.id, name: String(meta.name || 'file').slice(0, 255),
         size: meta.size, mime: String(meta.mime || '').slice(0, 128),
         n: meta.n, piece: meta.piece, hashes: meta.hashes, group: g, from: meta.from,
         parts: new Array(meta.n).fill(null), received: 0, timer: null, row,
+        inFlight: new Set(),
       };
       recvTransfers.set(meta.id, st);
+      recvReservedBytes += meta.size;
       armRecvTimer(st);
       return { st, created: true };
     }
@@ -601,11 +686,21 @@ const USBosApp = {
       if (!Number.isInteger(i) || i < 0 || i >= st.n) return;
       if (st.parts[i]) { ackRecv(st); return; } // duplicata : ré-accuser
       if (i !== st.received) return; // hors séquence : l'émetteur réémet sur timeout
+      // RÉSERVATION AVANT LE PREMIER await : `st.parts[i]` et `st.received`
+      // n'étaient modifiés qu'après sha256Hex(), donc deux livraison du même
+      // index (retransmission, ou double listener) passaient toutes deux les
+      // gardes et comptaient le morceau deux fois. Marquer l'index « en vol »
+      // rend le contrôle atomique.
+      if (st.inFlight.has(i)) return;
+      st.inFlight.add(i);
       toBytes(p.data).then(async (u8) => {
+        st.inFlight.delete(i);
         if (!recvTransfers.get(st.id)) return; // annulé entre-temps
         if (u8.length > st.piece + 16 || await sha256Hex(u8) !== String(st.hashes[i]).toLowerCase()) {
           ctx.ui.log(`mesh: morceau ${i} corrompu (${st.name}) — attente réémission`);
           return; // pas d'accusé : l'émetteur réémet sur timeout
+        }
+        if (st.parts[i]) { ackRecv(st); return; // arrivé pendant le hash
         }
         st.parts[i] = u8;
         st.received++;
@@ -613,11 +708,29 @@ const USBosApp = {
         st.row.set(st.received / st.n);
         if (st.received >= st.n) completeRecv(st);
         else ackRecv(st);
-      }).catch((err) => ctx.ui.log(`mesh: morceau illisible (${err.message})`));
+      }).catch((err) => {
+        st.inFlight.delete(i);
+        ctx.ui.log(`mesh: morceau illisible (${err.message})`);
+      });
     }
 
     function completeRecv(st) {
+      // Dernier rempart : si un morceau manque (abandon, double accus,
+      // séquence perturbée), on ne fabrique surtout PAS un fichier « null »
+      // à trous — l'émetteur est prévenu pour qu'il réémet.
+      const missing = st.parts.findIndex((x) => !x);
+      if (missing >= 0) {
+        ctx.ui.log(`mesh: ${st.name} incomplet (morceau ${missing}/${st.n} manquant) — rejet`);
+        if (st.timer) clearTimeout(st.timer);
+        st.row.done();
+        recvTransfers.delete(st.id);
+        releaseRecvBudget(st);
+        const conn = conns.get(st.from);
+        if (conn) { try { conn.send({ type: 'packCancel', id: st.id }); } catch { /* noop */ } }
+        return;
+      }
       recvTransfers.delete(st.id);
+      releaseRecvBudget(st);
       if (st.timer) clearTimeout(st.timer);
       st.row.done();
       const blob = new Blob(st.parts, { type: st.mime || 'application/octet-stream' });
@@ -626,7 +739,8 @@ const USBosApp = {
       const conn = conns.get(st.from);
       if (conn) { try { conn.send({ type: 'packDone', id: st.id }); } catch { /* noop */ } }
       doneAcks.set(st.id, { peer: st.from });
-      setTimeout(() => doneAcks.delete(st.id), 60000);
+      const purge = setTimeout(() => { doneAcks.delete(st.id); doneAckTimers.delete(purge); }, 60000);
+      doneAckTimers.add(purge);
       if (doneAcks.size > 20) { const k = doneAcks.keys().next().value; doneAcks.delete(k); }
       appendFileMsg(st.name, st.size, false, st.from, url, st.group);
       ctx.ui.log(`mesh: reçu ${st.name} (${st.n} morceaux)`);
@@ -636,6 +750,7 @@ const USBosApp = {
       const st = recvTransfers.get(String(id));
       if (!st) return;
       recvTransfers.delete(st.id);
+      releaseRecvBudget(st);
       if (st.timer) clearTimeout(st.timer);
       st.row.done();
       const conn = conns.get(st.from);
@@ -838,32 +953,43 @@ const USBosApp = {
         if (recvTransfers.has(id)) { abortRecv(id, false); return; }
         return;
       }
-      // Garde anti-causerie croisée : un message taggé d'un salon qu'on
-      // n'a pas est ignoré (pas d'affichage, pas de relais).
+      // Garde anti-causerie croisée : un salon qu'on n'a pas rejoint, ou dont
+      // l'expéditeur n'est pas membre, est ignoré (ni affiché, ni relayé).
+      // Tester seulement `cfg.groups[g]` laissait n'importe quel pair — même
+      // hors du salon — y injecter des messages en settant `group`.
       const g = payload.group != null ? String(payload.group) : null;
-      if (g && !cfg.groups[g]) return;
+      if (g && !groupAllowed(g, conn.peer)) return;
       if (payload.type === 'text') appendMsg(String(payload.text).slice(0, 4000), false, conn.peer, g);
       else if (payload.type === 'file') {
-        const size = payload.size || 0;
-        if (size > MAX_FILE_BYTES) { ctx.ui.log(`mesh: fichier refusé (${size} octets > 25 Mo)`); return; }
+        // La taille est MESURÉE sur les octets reçus, pas lue dans l'en-tête :
+        // un pair déclarait `size: 1` et-streamait 200 Mo, alloués d'un bloc.
         const mime = String(payload.mime || 'application/octet-stream').slice(0, 128);
         const blob = new Blob([payload.data], { type: mime });
+        if (blob.size > MAX_FILE_BYTES) {
+          ctx.ui.log(`mesh: fichier refusé (${blob.size} octets > 25 Mo)`, 'warn');
+          return;
+        }
         const url = URL.createObjectURL(blob);
         blobUrls.add(url);
-        appendFileMsg(String(payload.name).slice(0, 255), size, false, conn.peer, url, g);
+        appendFileMsg(String(payload.name || 'file').slice(0, 255), blob.size, false, conn.peer, url, g);
       }
     }
 
     function acceptConn(conn) {
-      conn.on('data', (payload) => handlePayload(conn, payload));
-      conn.on('close', () => { removePeerEverywhere(conn.peer); });
+      // NE PAS ré-enregistrer un listener 'data' ici : la connexion entrante
+      // en a déjà un (wireIncoming) qui délègue à handlePayload une fois
+      // acceptée. PeerJS `on` est additif -> deux passages par payload, et
+      // pour un transfert morcelé : double comptage de st.received, position
+      // d'accusé falsifiée, morceau sauté et fichier final "null"-poué alors
+      // que l'UI annonce 100 %. Le handler pré-acceptation se désactive donc
+      // lui-même (identity check sur conns) au lieu d'être dupliqué.
       conns.set(conn.peer, conn);
       dialing.delete(conn.peer);
       // Rejoue ce qui est arrivé avant l'acceptation (hello précoce…).
-      const queued = earlyQueue.get(conn.peer) || [];
+      const queued = earlyQueue.get(conn.peer);
       earlyQueue.delete(conn.peer);
       renderPeers(); updateSendEnabled();
-      for (const p of queued) { try { handlePayload(conn, p); } catch { /* noop */ } }
+      for (const p of (queued ? queued.items : [])) { try { handlePayload(conn, p); } catch { /* noop */ } }
       ctx.ui.log(`mesh: connexion acceptée (${conn.peer})`);
     }
 
@@ -880,7 +1006,7 @@ const USBosApp = {
       });
       conn.on('error', (e) => {
         dialing.delete(conn.peer);
-        ctx.ui.log(`mesh: erreur connexion (${e.message || e})`, 'e');
+        ctx.ui.log(`mesh: erreur connexion (${e.message || e})`, 'error');
       });
     }
 
@@ -907,11 +1033,24 @@ const USBosApp = {
         }, PENDING_TIMEOUT_MS);
         pendingIncoming.set(conn.peer, { conn, timer });
         conn.on('data', (payload) => {
-          if (conns.has(conn.peer)) { handlePayload(conn, payload); return; }
+          // Une seule fois le pair accepté, le handler NE fait plus que
+          // déléguer : c'est le chemin unique pour `data` sur cette
+          // connexion (identity check, pas un simple `has` : deux connexions
+          // peuvent coexister brièvement pour le même peerId).
+          if (conns.get(conn.peer) === conn) { handlePayload(conn, payload); return; }
           if (!payload || typeof payload !== 'object') return;
+          // File d'attente pré-acceptation : bornée en NOMBRE *et* en
+          // OCTETS. Les gros payloads binaires y sont jetés : ils n'ont
+          // aucun sens avant d'avoir accepté la connexion, et 5 demandes ×
+          // 20 messages × 25 Mo = plusieurs Go de RAM retenus 60 s.
+          if (payload.type !== 'hello' && payload.type !== 'text') return;
+          const bytes = earlyPayloadBytes(payload);
           let q = earlyQueue.get(conn.peer);
-          if (!q) { q = []; earlyQueue.set(conn.peer, q); }
-          if (q.length < MAX_EARLY_QUEUE) q.push(payload);
+          if (!q) { q = { items: [], bytes: 0 }; earlyQueue.set(conn.peer, q); }
+          if (q.items.length < MAX_EARLY_QUEUE && q.bytes + bytes <= MAX_EARLY_QUEUE_BYTES) {
+            q.items.push(payload);
+            q.bytes += bytes;
+          }
           renderPending(); // le contexte salon peut apparaître
         });
         conn.on('close', () => {
@@ -927,18 +1066,39 @@ const USBosApp = {
 
     async function ensurePeer(retry) {
       retry = retry || 0;
+      if (disposed) throw new Error(t('mesh.disposed'));
       if (peer && !peerDead && !peer.destroyed) return peer;
       if (peer) { try { peer.destroy(); } catch { /* noop */ } peer = null; }
       peerDead = false;
       setStatus(t('mesh.statusConnecting'));
       await loadPeerJS(ctx);
+      // L'app a pu être fermée pendant le chargement de la lib.
+      if (disposed) throw new Error(t('mesh.disposed'));
+      let attempt = null;
       try {
-        return await new Promise((resolve, reject) => {
+        attempt = await new Promise((resolve, reject) => {
           const p = new window.Peer(String(cfg.myId).replace(/[^a-zA-Z0-9-]/g, ''));
           peer = p;
-          p.on('open', () => { setStatus(t('mesh.statusOnline', { id: cfg.myId }), 'on'); resolve(p); });
+          p.on('open', () => {
+            // Fermée pendant l'ouverture : on détruit plutôt que de résoudre
+            // avec un Peer orphelin (socket vivant dans une iframe détruite).
+            if (disposed) { try { p.destroy(); } catch { /* noop */ } reject(new Error(t('mesh.disposed'))); return; }
+            setStatus(t('mesh.statusOnline', { id: cfg.myId }), 'on');
+            resolve(p);
+          });
           p.on('connection', (conn) => wireIncoming(conn));
+          // Perte du signaling sans 'error' : sans ces deux handlers, la
+          // pastille restait « En ligne » et ensurePeer recyclait indéfiniment
+          // un Peer dont le socket était mort (chaque dial échouait ensuite).
+          p.on('disconnected', () => {
+            if (peer !== p || disposed) return;
+            peerDead = true;
+            setStatus(t('mesh.statusError', { error: 'disconnected' }), 'err');
+            try { p.reconnect(); } catch { /* noop */ }
+          });
+          p.on('close', () => { if (peer === p && !disposed) { peerDead = true; setStatus(t('mesh.statusError', { error: 'closed' }), 'err'); } });
           p.on('error', (e) => {
+            if (disposed) { reject(new Error(t('mesh.disposed'))); return; }
             setStatus(t('mesh.statusError', { error: e.type || e.message }), 'err');
             if (!p.open) { peerDead = true; }
             reject(e);
@@ -946,17 +1106,24 @@ const USBosApp = {
         });
       } catch (e) {
         // Collision d'ID (unavailable-id) : régénère un code court, persiste, retry backoff max 3.
-        if (e && e.type === 'unavailable-id' && retry < 3) {
-          try { peer = null; } catch { /* noop */ }
+        if (e && e.type === 'unavailable-id' && retry < 3 && !disposed) {
+          // detruire l'instance AVANT de l'oublier : `peer = null` seul
+          // laissait le socket de signalisation et ses timers en vie.
+          if (attempt) { try { attempt.destroy(); } catch { /* noop */ } }
+          peer = null;
           cfg.myId = shortId();
-          try { await ctx.fs.writeJSON(CONFIG_FILE, cfg); } catch { /* noop */ }
+          // Une écriture ratée ici laisserait un nouvel id non persisté :
+          // au redémarrage on repartrait sur l'id en collision, en boucle.
+          try { await ctx.fs.writeJSON(CONFIG_FILE, cfg); }
+          catch (err) { ctx.ui.log(`mesh: nouvel id NON persisté (${err.message})`, 'error'); }
           try { idCard.querySelector('.code').textContent = cfg.myId; } catch { /* noop */ }
-          ctx.ui.log(`mesh: id collision, nouvel id ${cfg.myId} (retry ${retry + 1}/3)`);
+          ctx.ui.log(`mesh: id collision, nouvel id ${cfg.myId} (retry ${retry + 1}/3)`, 'warn');
           await new Promise((r) => setTimeout(r, 500 * (retry + 1)));
           return ensurePeer(retry + 1);
         }
         throw e;
       }
+      return attempt;
     }
 
     async function dialPeer(target, wantJoin) {
@@ -983,7 +1150,7 @@ const USBosApp = {
         return true;
       } catch (err) {
         dialing.delete(target);
-        ctx.ui.log(`mesh: connexion échouée (${err.message || err})`, 'e');
+        ctx.ui.log(`mesh: connexion échouée (${err.message || err})`, 'error');
         return false;
       }
     }
@@ -1029,12 +1196,20 @@ const USBosApp = {
       return out;
     }
 
+    /** Cibles d'envoi normalisées {conn, group} — la projection
+     *  `.map((e) => e.conn ? e : {conn: e, group: null})` était dupliquée
+     *  (et son `group` calculé n'était jamais lu : les deux appelants
+     *  utilisaient la variable `group` extérieure). */
+    function resolveTargets() {
+      return scopeTargets().map((e) => (e.conn ? { conn: e.conn, group: e.group } : { conn: e, group: null }));
+    }
+
     sendBtn.onclick = () => {
       const text = msgIn.value.trim().slice(0, 4000);
       if (!text || conns.size === 0) return;
       const scope = scopeSel.value;
       const group = scope && scope !== 'all' ? scope : null;
-      const targets = scopeTargets().map((e) => (e.conn ? e : { conn: e, group: null }));
+      const targets = resolveTargets();
       if (!targets.length) {
         try { ctx.ui.toast(t('mesh.noTargets')); } catch { /* noop */ }
         return;
@@ -1056,9 +1231,18 @@ const USBosApp = {
       }
       const scope = scopeSel.value;
       const group = scope && scope !== 'all' ? scope : null;
-      const targets = scopeTargets().map((e) => (e.conn ? e : { conn: e, group: null }));
+      const targets = resolveTargets();
       if (!targets.length) {
         try { ctx.ui.toast(t('mesh.noTargets')); } catch { /* noop */ }
+        return;
+      }
+      // Plafond de diffusion : un salon peut annoncer 50 membres, et un clic
+      // ouvrait 50 flux WebRTC + 50 copies du fichier en RAM. Au-delà, on
+      // exige un choix explicite.
+      if (targets.length > MAX_SEND_TARGETS) {
+        const msg = t('mesh.tooManyTargets', { n: targets.length, max: MAX_SEND_TARGETS });
+        ctx.ui.log(`mesh: ${targets.length} cibles > ${MAX_SEND_TARGETS} — envoi refusé`, 'warn');
+        try { ctx.ui.toast(msg); } catch { /* noop */ }
         return;
       }
       if (file.size > WARN_FILE_BYTES) {
@@ -1105,10 +1289,18 @@ const USBosApp = {
     });
 
     // Connexion "passive" ouverte dès l'entrée dans l'app pour être joignable.
-    ensurePeer().catch(() => { /* affiché via setStatus */ });
+    // ensurePeer() rejette si l'app se ferme pendant l'ouverture : c'est
+    // attendu, pas une panne (l'appelant n'attend pas).
+    ensurePeer().catch(() => { /* attendu si l'app se ferme ; sinon setStatus */ });
     renderPeers(); renderGroups(); renderPending(); renderInvites(); updateSendEnabled();
 
+    // Nettoyage TOTAL (le contrat l'exige) : Map ET timers compris.
+    // peerCaps et doneAckTimers étaient omis -> les Map continuaient de
+    // croître et des timers restaient armés après la destruction de l'app.
     meshCleanup = () => {
+      // EN PREMIER : neutralise toute ouverture encore en vol (handlers
+      // open/error/disconnected, retry de collision d'id) avant de fermer.
+      disposed = true;
       for (const entry of pendingIncoming.values()) { clearTimeout(entry.timer); try { entry.conn.close(); } catch { /* noop */ } }
       pendingIncoming.clear();
       earlyQueue.clear();
@@ -1120,20 +1312,25 @@ const USBosApp = {
       sendTransfers.clear();
       for (const st of recvTransfers.values()) {
         if (st.timer) clearTimeout(st.timer);
+        releaseRecvBudget(st);
         try { st.row.done(); } catch { /* noop */ }
       }
       recvTransfers.clear();
+      recvReservedBytes = 0;
       doneAcks.clear();
+      for (const tm of doneAckTimers) clearTimeout(tm);
+      doneAckTimers.clear();
       dialing.clear();
       peerGroups.clear();
+      peerCaps.clear();
       groupMembers.clear();
       for (const c of conns.values()) { try { c.close(); } catch { /* noop */ } }
       conns.clear();
       for (const u of blobUrls) { try { URL.revokeObjectURL(u); } catch { /* noop */ } }
       blobUrls.clear();
       if (peer) { try { peer.destroy(); } catch { /* noop */ } peer = null; }
-    };
-  },
+      peerDead = true;
+    };  },
   async unmount() { if (meshCleanup) { try { meshCleanup(); } catch { /* noop */ } meshCleanup = null; } },
 }
 return USBosApp;

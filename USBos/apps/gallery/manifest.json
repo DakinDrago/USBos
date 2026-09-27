@@ -1,8 +1,8 @@
 {
+  "description": "Photos, vidéos et audios de la clé (Partage/, fichiers locaux, médias importés). Comprend le conteneur .upack vérifié.",
+  "entry": "index.js",
+  "icon": "🖼️",
   "id": "gallery",
   "name": "Galerie",
-  "version": "1.0.0",
-  "entry": "index.js",
-  "description": "Photos, vidéos et audios de la clé (Partage/, fichiers locaux, médias importés). Comprend le conteneur .upack vérifié.",
-  "icon": "🖼️"
+  "version": "1.0.1"
 }

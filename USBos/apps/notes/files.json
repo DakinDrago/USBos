@@ -1,7 +1,9 @@
 {
   "files": {
-    "index.js": "c5e5785c72ba98387ad55989b25a14919b69d904378f54f51463501b5322dbe3",
-    "manifest.json": "0f5d9a9827fedd69b7465ba70628c0398c1bfb0d572517301aedc176e85452fb"
+    "index.js": "de0149863033d0e73fd1e3d71675e44735560102709c7178223afab897d95a4b",
+    "lang/en.json": "afc725b692f2d152639ce8017a8270a0f7b702f5762deadd33a18622509b23d5",
+    "lang/fr.json": "a0dc3bd828a90dda91672e6d07c4972e8dfa3d735a84b660f88448def6a9539f",
+    "manifest.json": "9d7123761723b3077df8ea0d735166da10dbf28e8205949584e1e10a6e9f5afc"
   },
-  "version": "1.0.0"
+  "version": "1.0.1"
 }

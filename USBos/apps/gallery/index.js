@@ -4,13 +4,24 @@
  * locaux (sélecteur, lecture directe sans copie) et vos médias importés
  * (data:gallery). Comprend le conteneur .upack v1 (vérifié morceau par
  * morceau, extraction ou lecture directe du média intérieur).
- * Plafonds : 256 Mo par média (pont RPC) ; export .upack ≤ 64 Mo.
+ *
+ * Plafonds — deux ceilings DIFFÉRENTS, à ne plus confondre :
+ * - DATA_MAX_BYTES 64 Mo : écrire dans data:gallery/ passe par le chiffrement
+ *   du noyau, qui refuse au-delà de 64 Mo par fichier. C'est la VRAI limite
+ *   d'un média importé (l'ancien 256 MoIci mentait : l'import échouait au
+ *   dernier moment, sans message, après avoir chargé le fichier en RAM).
+ * - SHARED_MAX_BYTES 256 Mo : Partage/ est en clair, d'où la limite du pont.
+ * - UPACK_BUILD_MAX 64 Mo : taille d'un .upack construit.
  */
-const CONFIG_MAX_BYTES = 256 * 1024 * 1024;
+const DATA_MAX_BYTES = 64 * 1024 * 1024;
+const SHARED_MAX_BYTES = 256 * 1024 * 1024;
 const UPACK_BUILD_MAX = 64 * 1024 * 1024;
 const THUMB_MAX_BYTES = 8 * 1024 * 1024;
 const UPACK_CHUNK = 1024 * 1024;
 const MAX_LIST = 200;
+// Vignettes : reads sérialisés avec un petit pool. Avant, 200 vignettes
+// partaient en 200 lectures COMPLÈTES simultanées (jusqu'à 64 Mo chacune).
+const THUMB_CONCURRENCY = 4;
 
 const IMG_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'svg'];
 const VID_EXTS = ['mp4', 'webm', 'mkv', 'mov', 'avi'];
@@ -68,16 +79,36 @@ async function loadUpackLib(ctx) {
   return window.USBosUpack;
 }
 
+const MIME_BY_EXT = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+  gif: 'image/gif', bmp: 'image/bmp', svg: 'image/svg+xml',
+  mp4: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska', mov: 'video/quicktime', avi: 'video/x-msvideo',
+  mp3: 'audio/mpeg', wav: 'audio/wav', ogg: 'audio/ogg', flac: 'audio/flac', m4a: 'audio/mp4',
+};
+function mimeOf(name) { return MIME_BY_EXT[extOf(name)] || 'application/octet-stream'; }
+
 const USBosApp = {
   id: 'gallery',
   async mount(ctx, stage) {
     stage.append(el('style', null, STYLE));
     const t = ctx.i18n.t;
     const U = await loadUpackLib(ctx).catch(() => null);
+    if (!U) {
+      // Signalé au montage : sinon les entrées .upack s'affichent avec des
+      // boutons qui ne font RIEN (échec silencieux jusqu'au premier clic).
+      try { ctx.ui.toast(t('gallery.upackUnavailable')); } catch { /* noop */ }
+    }
 
     const wrap = el('div', 'gallery-app');
     const blobUrls = new Set();
     const track = (url) => { blobUrls.add(url); return url; };
+    // Purge des URLs blob d'un rendu : sans ça, chaque re-rendin (import,
+    // extraction, suppression) créait une nouvelle génération de vignettes
+    // sans révoquer les précédentes -> croissance monotone de la RAM.
+    const releaseThumbs = () => {
+      for (const u of blobUrls) { try { URL.revokeObjectURL(u); } catch { /* noop */ } }
+      blobUrls.clear();
+    };
     let viewerCloser = null;
     const closeViewerNow = () => { const f = viewerCloser; viewerCloser = null; if (f) { try { f(); } catch { /* noop */ } } };
 
@@ -89,14 +120,18 @@ const USBosApp = {
     function openViewer(build) {
       closeViewerNow();
       const ov = el('div', 'viewer');
+      let media = null;
       const closer = () => {
         document.removeEventListener('keydown', onKey);
+        // pause() explicite : s'appuyer sur « retiré du document = pause » est
+        // dépendant de la spec, et une vidéo en lecture garde son son.
+        if (media && typeof media.pause === 'function') { try { media.pause(); } catch { /* noop */ } }
         try { ov.remove(); } catch { /* noop */ }
       };
       const onKey = (ev) => { if (ev.key === 'Escape') closeViewerNow(); };
       document.addEventListener('keydown', onKey);
       viewerCloser = closer;
-      build(ov, closer);
+      build(ov, (m) => { media = m; });
       wrap.append(ov);
     }
 
@@ -109,26 +144,31 @@ const USBosApp = {
     }
 
     function viewBlob(kind, url, name, extra) {
-      openViewer((ov, closer) => {
-        ov.append(mediaNode(kind, url, name), el('div', 'cap', name));
+      openViewer((ov, setMedia) => {
+        const m = mediaNode(kind, url, name);
+        setMedia(m);
+        ov.append(m, el('div', 'cap', name));
         const acts = el('div', 'vacts');
         if (extra) for (const b of extra) acts.append(b);
         const dl = el('a', 'mini', t('gallery.download'));
         dl.href = url; dl.download = name;
         const close = el('button', 'mini', t('gallery.closeViewer'));
-        close.onclick = () => closer();
+        // closeViewerNow() et non closer() : la variable interne reste ainsi
+        // cohérente (le prochain closeViewerNow, y compris à l'unmount, ne
+        // rappelle pas un closer d'overlay déjà retiré du DOM).
+        close.onclick = () => closeViewerNow();
         acts.append(dl, close);
         ov.append(acts);
       });
     }
 
     async function viewUpackBytes(u8, packName, saveAs) {
-      if (!U) { ctx.ui.log('gallery: lib .upack indisponible'); return; }
+      if (!U) { ctx.ui.log('gallery: lib .upack indisponible', 'warn'); return; }
       let parsed;
       try {
         parsed = await U.extractUpack(u8);
       } catch (err) {
-        ctx.ui.log(`gallery: .upack invalide (${err.message})`);
+        ctx.ui.log(`gallery: .upack invalide (${err.message})`, 'warn');
         try { ctx.ui.toast(t('gallery.upackInvalid')); } catch { /* noop */ }
         return;
       }
@@ -142,19 +182,21 @@ const USBosApp = {
           b.onclick = async () => { await saveAs(h.name, parsed.bytes); };
           return b;
         })() : null;
-        openViewer((ov, closer) => {
-          ov.append(mediaNode(innerKind, url, h.name), el('div', 'cap', h.name), el('div', 'info', info));
+        openViewer((ov, setMedia) => {
+          const m = mediaNode(innerKind, url, h.name);
+          setMedia(m);
+          ov.append(m, el('div', 'cap', h.name), el('div', 'info', info));
           const acts = el('div', 'vacts');
           if (save) acts.append(save);
           const dl = el('a', 'mini', t('gallery.download'));
           dl.href = url; dl.download = h.name;
           const close = el('button', 'mini', t('gallery.closeViewer'));
-          close.onclick = () => closer();
+          close.onclick = () => closeViewerNow();
           acts.append(dl, close);
           ov.append(acts);
         });
       } else {
-        openViewer((ov, closer) => {
+        openViewer((ov) => {
           ov.append(el('div', 'cap', h.name), el('div', 'info', info));
           const acts = el('div', 'vacts');
           if (saveAs) {
@@ -163,7 +205,7 @@ const USBosApp = {
             acts.append(b);
           }
           const close = el('button', 'mini', t('gallery.closeViewer'));
-          close.onclick = () => closer();
+          close.onclick = () => closeViewerNow();
           acts.append(close);
           ov.append(acts);
         });
@@ -195,11 +237,11 @@ const USBosApp = {
     pick.onchange = async () => {
       for (const f of [...pick.files]) {
         if (isUpack(f.name)) {
-          if (f.size > CONFIG_MAX_BYTES) { ctx.ui.log(`gallery: .upack trop gros (${f.name})`); continue; }
+          if (f.size > SHARED_MAX_BYTES) { ctx.ui.log(`gallery: .upack trop gros (${f.name})`, 'warn'); continue; }
           try {
             const u8 = new Uint8Array(await f.arrayBuffer());
             await viewUpackBytes(u8, f.name, null);
-          } catch (err) { ctx.ui.log(`gallery: lecture impossible (${err.message})`); }
+          } catch (err) { ctx.ui.log(`gallery: lecture impossible (${err.message})`, 'warn'); }
           continue;
         }
         const kind = kindOf(f.name);
@@ -238,35 +280,76 @@ const USBosApp = {
       return new Uint8Array(buf);
     }
 
-    async function importFromShared(name, bytes) {
-      const data = bytes || await readSharedWhole(name).catch((err) => { ctx.ui.log(`gallery: lecture impossible (${err.message})`); return null; });
-      if (!data) return;
-      if (data.length > CONFIG_MAX_BYTES) {
-        try { ctx.ui.toast(t('gallery.tooBig', { max: human(CONFIG_MAX_BYTES) })); } catch { /* noop */ }
+    /** Pool de vignettes : THUMB_CONCURRENCY lectures simultanées maximum.
+     *  Avant, chaque vignette déclenchait sa lecture complète en même temps
+     *  (200 entrées × jusqu'à 64 Mo) — on sature la RAM pour des miniatures. */
+    function makeThumbPool(limit) {
+      const queue = [];
+      let active = 0;
+      const pump = () => {
+        while (active < limit && queue.length) {
+          const job = queue.shift();
+          active++;
+          Promise.resolve()
+            .then(job.run)
+            .catch(() => {})
+            .then(() => { active--; pump(); });
+        }
+      };
+      return (run) => { queue.push({ run }); pump(); };
+    }
+
+    const importFromShared = async (name) => {
+      // Le plafond data: (64 Mo) est vérifié via stat AVANT la lecture :
+      // l'ancien contrôle post-lecture laissait entrer 200 Mo en RAM pour
+      // échouer ensuite sur le refus du noyau.
+      const st = await ctx.fs.statShared(name).catch(() => null);
+      if (st && st.size > DATA_MAX_BYTES) {
+        try { ctx.ui.toast(t('gallery.tooBig', { max: human(DATA_MAX_BYTES) })); } catch { /* noop */ }
+        ctx.ui.log(`gallery: import refusé, ${name} dépasse ${human(DATA_MAX_BYTES)} (plafond data:gallery)`, 'warn');
+        return;
+      }
+      let data;
+      try { data = await readSharedWhole(name); }
+      catch (err) { ctx.ui.log(`gallery: lecture impossible (${err.message})`, 'warn'); return; }
+      if (data.length > DATA_MAX_BYTES) {
+        try { ctx.ui.toast(t('gallery.tooBig', { max: human(DATA_MAX_BYTES) })); } catch { /* noop */ }
         return;
       }
       const existsFn = async (n) => { try { return await ctx.fs.exists(n); } catch { return false; } };
       const dest = await uniqueName(existsFn, name);
-      if (!dest) { ctx.ui.log('gallery: trop de doublons'); return; }
+      if (!dest) { ctx.ui.log('gallery: trop de doublons', 'warn'); return; }
       try {
         await ctx.fs.writeBinary(dest, data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength));
         try { ctx.ui.toast(t('gallery.imported', { name: dest })); } catch { /* noop */ }
         ctx.ui.log(`gallery: importé (${dest})`);
         await renderMine();
       } catch (err) {
-        ctx.ui.log(`gallery: import impossible (${err.message})`);
+        // Échec visible : l'utilisateur ne doit pas croire l'import réussi.
+        ctx.ui.log(`gallery: import impossible (${err.message})`, 'error');
+        try { ctx.ui.toast(t('gallery.importFailed', { error: err.message })); } catch { /* noop */ }
       }
-    }
+    };
 
     async function viewShared(name) {
       if (isUpack(name)) {
-        const u8 = await readSharedWhole(name).catch((err) => { ctx.ui.log(`gallery: lecture impossible (${err.message})`); return null; });
+        const st = await ctx.fs.statShared(name).catch(() => null);
+        if (st && st.size > SHARED_MAX_BYTES) {
+          try { ctx.ui.toast(t('gallery.tooBig', { max: human(SHARED_MAX_BYTES) })); } catch { /* noop */ }
+          return;
+        }
+        const u8 = await readSharedWhole(name).catch((err) => { ctx.ui.log(`gallery: lecture impossible (${err.message})`, 'warn'); return null; });
         if (!u8) return;
-        if (u8.length > CONFIG_MAX_BYTES) {
-          try { ctx.ui.toast(t('gallery.tooBig', { max: human(CONFIG_MAX_BYTES) })); } catch { /* noop */ }
+        if (u8.length > SHARED_MAX_BYTES) {
+          try { ctx.ui.toast(t('gallery.tooBig', { max: human(SHARED_MAX_BYTES) })); } catch { /* noop */ }
           return;
         }
         await viewUpackBytes(u8, name, async (inner, bytes) => {
+          if (bytes.byteLength > DATA_MAX_BYTES) {
+            try { ctx.ui.toast(t('gallery.tooBig', { max: human(DATA_MAX_BYTES) })); } catch { /* noop */ }
+            ctx.ui.log(`gallery: extraction refusée, ${inner} dépasse le plafond data:`, 'warn');
+            return;
+          }
           const existsFn = async (n) => { try { return await ctx.fs.exists(n); } catch { return false; } };
           const dest = await uniqueName(existsFn, inner);
           if (!dest) return;
@@ -274,30 +357,37 @@ const USBosApp = {
             await ctx.fs.writeBinary(dest, bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
             try { ctx.ui.toast(t('gallery.extracted', { name: dest })); } catch { /* noop */ }
             await renderMine();
-          } catch (err) { ctx.ui.log(`gallery: extraction impossible (${err.message})`); }
+          } catch (err) { ctx.ui.log(`gallery: extraction impossible (${err.message})`, 'error'); }
         });
         return;
       }
       const kind = kindOf(name);
       if (!kind) return;
-      const u8 = await readSharedWhole(name).catch((err) => { ctx.ui.log(`gallery: lecture impossible (${err.message})`); return null; });
+      const st = await ctx.fs.statShared(name).catch(() => null);
+      if (st && st.size > SHARED_MAX_BYTES) {
+        try { ctx.ui.toast(t('gallery.tooBig', { max: human(SHARED_MAX_BYTES) })); } catch { /* noop */ }
+        return;
+      }
+      const u8 = await readSharedWhole(name).catch((err) => { ctx.ui.log(`gallery: lecture impossible (${err.message})`, 'warn'); return null; });
       if (!u8) return;
-      if (u8.length > CONFIG_MAX_BYTES) {
-        try { ctx.ui.toast(t('gallery.tooBig', { max: human(CONFIG_MAX_BYTES) })); } catch { /* noop */ }
+      if (u8.length > SHARED_MAX_BYTES) {
+        try { ctx.ui.toast(t('gallery.tooBig', { max: human(SHARED_MAX_BYTES) })); } catch { /* noop */ }
         return;
       }
       const url = track(URL.createObjectURL(new Blob([u8])));
       viewBlob(kind, url, name, null);
     }
 
+    const sharedThumbPool = makeThumbPool(THUMB_CONCURRENCY);
     async function renderShared() {
+      releaseThumbs();
       sharedGrid.innerHTML = '';
       sharedRows.innerHTML = '';
       let entries = [];
       try {
         entries = (await ctx.fs.listShared('')).filter((e) => e.kind === 'file' && isMedia(e.name)).slice(0, MAX_LIST);
       } catch (err) {
-        ctx.ui.log(`gallery: Partage/ inaccessible (${err.message})`);
+        ctx.ui.log(`gallery: Partage/ inaccessible (${err.message})`, 'warn');
         sharedEmpty.style.display = 'block';
         return;
       }
@@ -307,7 +397,11 @@ const USBosApp = {
           const cell = el('button', 'thumb');
           cell.onclick = () => { void viewShared(e.name); };
           const im = el('img'); im.alt = e.name;
-          readSharedWhole(e.name).then((u8) => {
+          // stat() d'abord : au-delà de 8 Mo, inutile de lire le fichier.
+          sharedThumbPool(async () => {
+            const st = await ctx.fs.statShared(e.name).catch(() => null);
+            if (st && st.size > THUMB_MAX_BYTES) { im.remove(); return; }
+            const u8 = await readSharedWhole(e.name);
             if (u8.length > THUMB_MAX_BYTES) { im.remove(); return; }
             im.src = track(URL.createObjectURL(new Blob([u8])));
           }).catch(() => { try { im.remove(); } catch { /* noop */ } });
@@ -329,15 +423,23 @@ const USBosApp = {
     const mineEmpty = el('div', 'empty', t('gallery.mineEmpty'));
     mineCard.append(mineGrid, mineRows, mineEmpty);
 
+    const mineThumbPool = makeThumbPool(THUMB_CONCURRENCY);
     async function renderMine() {
+      releaseThumbs();
       mineGrid.innerHTML = '';
       mineRows.innerHTML = '';
       let entries = [];
       try {
         entries = (await ctx.fs.list('')).filter((e) => e.kind === 'file' && isMedia(e.name)).slice(0, MAX_LIST);
       } catch (err) {
-        ctx.ui.log(`gallery: lecture impossible (${err.message})`);
-        return;
+        // data:gallery/ n'existe pas encore sur une clé neuve : c'est
+        // « aucun média importé », pas une panne. Le journaliser en
+        // "lecture impossible" était un faux signal à chaque ouverture.
+        if (!err || err.name !== 'NotFoundError') {
+          ctx.ui.log(`gallery: listage impossible (${err.message})`, 'error');
+          return;
+        }
+        entries = [];
       }
       mineEmpty.style.display = entries.length ? 'none' : 'block';
       for (const e of entries) {
@@ -346,8 +448,10 @@ const USBosApp = {
           const cell = el('button', 'thumb');
           cell.onclick = () => { void view(); };
           const im = el('img'); im.alt = e.name;
-          ctx.fs.readBinary(e.name).then((buf) => {
-            const u8 = new Uint8Array(buf);
+          mineThumbPool(async () => {
+            const st = await ctx.fs.stat(e.name).catch(() => null);
+            if (st && st.size > THUMB_MAX_BYTES) { im.remove(); return; }
+            const u8 = new Uint8Array(await ctx.fs.readBinary(e.name));
             if (u8.length > THUMB_MAX_BYTES) { im.remove(); return; }
             im.src = track(URL.createObjectURL(new Blob([u8])));
           }).catch(() => { try { im.remove(); } catch { /* noop */ } });
@@ -355,67 +459,88 @@ const USBosApp = {
           mineGrid.append(cell);
         }
         const acts = [];
-        const exp = el('button', 'mini', t('gallery.exportUpack'));
-        exp.onclick = async () => { await exportUpack(e.name); };
+        // Un .upack est DÉJÀ un conteneur : le ré-emballer produisait
+        // photo.jpg.upack.upack (un fichier que la galerie ne savorait pas
+        // relire comme média). On n'expose l'export que pour les médias bruts.
+        if (!isUpack(e.name)) {
+          const exp = el('button', 'mini', t('gallery.exportUpack'));
+          exp.onclick = async () => { await exportUpack(e.name); };
+          acts.push(exp);
+        }
         const del = el('button', 'mini del', t('gallery.delete'));
         del.onclick = async () => {
           if (del.textContent !== t('gallery.sure')) { del.textContent = t('gallery.sure'); return; }
           try {
-            await ctx.fs.remove(e.name, { confirm: true });
+            await ctx.fs.remove(e.name);
             try { ctx.ui.toast(t('gallery.deleted', { name: e.name })); } catch { /* noop */ }
             await renderMine();
-          } catch (err) { ctx.ui.log(`gallery: suppression impossible (${err.message})`); }
+          } catch (err) { ctx.ui.log(`gallery: suppression impossible (${err.message})`, 'error'); }
         };
-        acts.push(exp, del);
+        acts.push(del);
         addRow(mineRows, e.name, kindOf(e.name) || '.upack', view, acts);
       }
     }
 
     async function viewMine(name) {
+      const kind0 = kindOf(name);
+      // readBinary sur data: est DÉJÀ plafonné à 64 Mo par le noyau : inutile
+      // de re-tester 256 Mo ici (l'import ne pouvait d'ailleurs pas dépasser
+      // cette limite, tout export/shared en revanche).
       let buf;
       try {
         buf = await ctx.fs.readBinary(name);
-      } catch (err) { ctx.ui.log(`gallery: lecture impossible (${err.message})`); return; }
+      } catch (err) { ctx.ui.log(`gallery: lecture impossible (${err.message})`, 'warn'); return; }
       const u8 = new Uint8Array(buf);
-      if (u8.length > CONFIG_MAX_BYTES) {
-        try { ctx.ui.toast(t('gallery.tooBig', { max: human(CONFIG_MAX_BYTES) })); } catch { /* noop */ }
-        return;
-      }
       if (isUpack(name)) {
         await viewUpackBytes(u8, name, null);
         return;
       }
-      const kind = kindOf(name);
+      const kind = kind0;
       if (!kind) return;
       viewBlob(kind, track(URL.createObjectURL(new Blob([u8]))), name, null);
     }
 
     async function exportUpack(name) {
-      if (!U) { ctx.ui.log('gallery: lib .upack indisponible'); return; }
+      if (!U) { ctx.ui.log('gallery: lib .upack indisponible', 'warn'); return; }
+      if (isUpack(name)) { ctx.ui.log(`gallery: ${name} est déjà un .upack`, 'warn'); return; }
+      const st = await ctx.fs.stat(name).catch(() => null);
+      if (st && st.size > UPACK_BUILD_MAX) {
+        try { ctx.ui.toast(t('gallery.upackTooBig')); } catch { /* noop */ }
+        ctx.ui.log('gallery: export .upack refusé (>64 Mo en RAM)', 'warn');
+        return;
+      }
       let buf;
       try {
         buf = await ctx.fs.readBinary(name);
-      } catch (err) { ctx.ui.log(`gallery: lecture impossible (${err.message})`); return; }
+      } catch (err) { ctx.ui.log(`gallery: lecture impossible (${err.message})`, 'warn'); return; }
       const u8 = new Uint8Array(buf);
       if (u8.length > UPACK_BUILD_MAX) {
         try { ctx.ui.toast(t('gallery.upackTooBig')); } catch { /* noop */ }
-        ctx.ui.log('gallery: export .upack refusé (>64 Mo en RAM)');
+        ctx.ui.log('gallery: export .upack refusé (>64 Mo en RAM)', 'warn');
         return;
       }
       let packed;
       try {
-        packed = await U.buildUpack({ name, mime: '', bytes: u8, chunk: UPACK_CHUNK });
+        // mime: '' -> le conteneur sortait en application/octet-stream même
+        // pour un JPEG. kindOf connaît l'extension.
+        packed = await U.buildUpack({ name, mime: mimeOf(name), bytes: u8, chunk: UPACK_CHUNK });
       } catch (err) {
-        ctx.ui.log(`gallery: emballage impossible (${err.message})`);
+        ctx.ui.log(`gallery: emballage impossible (${err.message})`, 'error');
         return;
       }
-      const dest = `${name}.upack`;
+      // Jamais d'écrasement dans Partage/ : suffixe si le nom est pris.
+      const existsFn = async (n) => { try { return await ctx.fs.existsShared(n); } catch { return false; } };
+      const dest = await uniqueName(existsFn, `${name}.upack`);
+      if (!dest) { ctx.ui.log('gallery: trop de doublons', 'warn'); return; }
       try {
-        await ctx.fs.writeShared(dest, packed.bytes.buffer.slice(0));
+        // pas de .slice(0) : packed.bytes.buffer est déjà exclusif, la copie
+        // coûtait 64 Mo de RAM pour rien.
+        await ctx.fs.writeShared(dest, packed.bytes.buffer);
         try { ctx.ui.toast(t('gallery.exportedUpack', { name: dest })); } catch { /* noop */ }
         ctx.ui.log(`gallery: exporté vers Partage/ (${dest})`);
       } catch (err) {
-        ctx.ui.log(`gallery: export impossible (${err.message})`);
+        ctx.ui.log(`gallery: export impossible (${err.message})`, 'error');
+        try { ctx.ui.toast(t('gallery.exportFailed', { error: err.message })); } catch { /* noop */ }
       }
     }
 
@@ -432,8 +557,7 @@ const USBosApp = {
 
     let galleryCleanupFn = () => {
       closeViewerNow();
-      for (const u of blobUrls) { try { URL.revokeObjectURL(u); } catch { /* noop */ } }
-      blobUrls.clear();
+      releaseThumbs();
     };
     galleryCleanup = galleryCleanupFn;
   },

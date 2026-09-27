@@ -20,8 +20,9 @@ function assertSafePart(p) {
   if (typeof p !== 'string') throw new VFSError('Invalid path segment (string expected)', 'BAD_PATH');
   const n = p.normalize('NFC');
   if (n === '.' || n === '..') throw new VFSError(`Forbidden path segment: ${p}`, 'BAD_PATH');
+  // BAD_NAME_CHARS couvre déjà ':' (réservé au schéma VFS) comme les autres
+  // caractères interdits FAT32/exFAT — pas de second test nécessaire ici.
   if (BAD_NAME_CHARS.test(n)) throw new VFSError(`Forbidden file name: ${p}`, 'BAD_PATH');
-  if (n.includes(':')) throw new VFSError(`Forbidden file name (':' reserved for VFS scheme): ${p}`, 'BAD_PATH');
   if (/[ .]$/.test(n)) throw new VFSError(`Forbidden file name (trailing space/dot, Windows): ${p}`, 'BAD_PATH');
   if (RESERVED_WIN_NAMES.test(n)) throw new VFSError(`Reserved Windows file name: ${p}`, 'BAD_PATH');
   const bytes = (typeof TextEncoder !== 'undefined') ? new TextEncoder().encode(n).length : n.length;
@@ -312,15 +313,28 @@ class VFS {
     return out;
   }
 
-  /** Déplace/renomme via staging (écrit tmp, vérifie, puis supprime la source).
-   * Non-atomique côté FS API, mais la source n'est supprimée qu'après écriture réussie. */
+  /** Déplace/renomme via staging (écrit tmp, relit, puis supprime la source).
+   * Non-atomique côté FS API, mais la source n'est supprimée qu'après écriture
+   * réussie ET relecture conforme (le contenu relu du staging est la preuve
+   * que l'écriture a bien atterri). */
   async moveFile(fromVpath, toVpath) {
-    const buf = await this.readBinary(fromVpath).catch(() => null);
-    if (buf === null) throw new VFSError(`Source not found: ${fromVpath}`, 'NOT_FOUND');
+    let buf;
+    try {
+      buf = await this.readBinary(fromVpath);
+    } catch (err) {
+      // distinguer « absent » d'une erreur réelle : un NotFound masqué en
+      // "source manquante" faisait croire à une perte de données.
+      if (err && err.name === 'NotFoundError') throw new VFSError(`Source not found: ${fromVpath}`, 'NOT_FOUND');
+      throw err;
+    }
     const staging = `update:staging/move-${Date.now()}-${Math.floor(Math.random() * 1e6)}.tmp`;
     await this.writeBinary(staging, buf);
     try {
-      await this.writeBinary(toVpath, await this.readBinary(staging));
+      const staged = await this.readBinary(staging);
+      if (staged.byteLength !== buf.byteLength) {
+        throw new VFSError(`Staging verification failed for ${fromVpath}`, 'STAGING_MISMATCH');
+      }
+      await this.writeBinary(toVpath, staged);
     } finally {
       try { await this.remove(staging, { force: true }); } catch { /* noop */ }
     }

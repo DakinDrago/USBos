@@ -30,6 +30,14 @@ SEMVER_RE = re.compile(r"^\d+(\.\d+)+(-[0-9A-Za-z.-]+)?$")  # x.y, x.y.z, x.y.z.
 KERNEL_RE = re.compile(r"const\s+KERNEL_VERSION\s*=\s*['\"]([^'\"]+)['\"]")
 CACHEBUST_RE = re.compile(r"""(?:src|href)="system/[^"]+?\?v=([^"&\s]+)""")
 
+# Sortie UTF-8 explicite : les messages FR/EN passent par print() et la console
+# Windows (cp437/cp1252) les détruisait (« versionn�(s) »). errors="replace"
+# garantit qu'un caractère non représentable n'interrompt jamais la validation.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, OSError):
+    pass
+
 results = []  # (level, rule, detail)
 
 

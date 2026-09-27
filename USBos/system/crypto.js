@@ -13,6 +13,17 @@
 // versionnée + migration de ré-encryption (non implémentée v1).
 const PBKDF2_ITERATIONS = 210000;
 const MAX_PLAINTEXT_BYTES = 64 * 1024 * 1024;
+// En-tête worst-case : magic(3) + IV(12) + tag GCM(16). Le déchiffré est
+// borné comme le clair, sinon un fichier arbitrairement gros charged en RAM
+// (ou une v2 tronquée dont le magic a disparu) part en AES-GCM sans limite.
+const MAX_CIPHERTEXT_BYTES = MAX_PLAINTEXT_BYTES + 3 + 12 + 16;
+
+/** Erreur typée : le code est stable (indépendant de la langue) unlike le message. */
+function cryptoError(code, message) {
+  const e = new Error(message);
+  e.code = code;
+  return e;
+}
 
 function generateSalt(len = 16) {
   return crypto.getRandomValues(new Uint8Array(len));
@@ -64,7 +75,14 @@ async function encryptBuffer(key, arrayBuffer, aad) {
 
 async function decryptBuffer(key, buffer, aad) {
   if (!key) throw new Error('Clé manquante.');
-  const bytes = buffer instanceof Uint8Array ? buffer : buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : ArrayBuffer.isView(buffer) ? new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength) : new Uint8Array(buffer);
+  let bytes;
+  if (buffer instanceof Uint8Array) bytes = buffer;
+  else if (buffer instanceof ArrayBuffer) bytes = new Uint8Array(buffer);
+  else if (ArrayBuffer.isView(buffer)) bytes = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  else throw new TypeError('Données à déchiffrer invalides (ArrayBuffer ou vue typée attendu).');
+  if (bytes.length > MAX_CIPHERTEXT_BYTES) {
+    throw cryptoError('TOO_LARGE', `Données chiffrées trop volumineuses (max ${MAX_PLAINTEXT_BYTES} octets).`);
+  }
   const additionalData = normalizeAad(aad);
   try {
     if (bytes.length >= 3 && bytes[0] === 0x55 && bytes[1] === 0x31 && bytes[2] === 0x01) {
@@ -85,4 +103,7 @@ async function decryptBuffer(key, buffer, aad) {
   }
 }
 
-window.USBosCrypto = { deriveMasterKey, encryptBuffer, decryptBuffer, generateSalt, PBKDF2_ITERATIONS };
+window.USBosCrypto = {
+  deriveMasterKey, encryptBuffer, decryptBuffer, generateSalt,
+  PBKDF2_ITERATIONS, MAX_PLAINTEXT_BYTES, MAX_CIPHERTEXT_BYTES,
+};

@@ -45,6 +45,12 @@ function newId() {
   return `${hx.slice(0, 8)}-${hx.slice(8, 12)}-${hx.slice(12, 16)}-${hx.slice(16, 20)}-${hx.slice(20)}`;
 }
 
+// Plafonds (le noyau refuse au-delà de 2 Mo sérialisés pour data:<id>/) :
+// MAX_DOC_CHARS borne un document, MAX_STATE_BYTES borne la bibliothèque
+// entière. Toute troncature est annoncée dans l'UI — jamais silencieuse.
+const MAX_DOC_CHARS = 500000;
+const MAX_STATE_BYTES = 2 * 1024 * 1024;
+
 function relTime(t, locale, ts, now) {
   const d = Math.max(0, (now || Date.now()) - ts);
   const m = Math.floor(d / 60000);
@@ -97,7 +103,15 @@ const USBosApp = {
     const locale = ctx.i18n.locale;
 
     let data;
-    try { data = await ctx.fs.readJSON(STATE_FILE); } catch { /* premier lancement */ }
+    // Échec de lecture != premier lancement : une écriture VFS non atomique
+    // tronquée faisait retomber l'app sur une bibliothèque vide, et le
+    // persist() suivant écrasait tous les documents encore présents.
+    let loadError = null;
+    try { data = await ctx.fs.readJSON(STATE_FILE); }
+    catch (err) {
+      if (err && err.name === 'NotFoundError') data = { docs: [] };
+      else { loadError = err; data = { docs: [] }; ctx.ui.log(`markdown: lecture impossible (${err.message}) — enregistrement désactivé`, 'error'); }
+    }
     if (!data || !Array.isArray(data.docs)) data = { docs: [] };
     let current = null;
     let preview = false;
@@ -122,26 +136,37 @@ const USBosApp = {
       const safe = (d.name || t('markdown.defaultName')).replace(/[<>:"|?*\\/]+/g, '-').slice(0, 100) || t('markdown.defaultName');
       try {
         const _expBytes = new TextEncoder().encode(d.content || '').length;
-        if (_expBytes > 2 * 1024 * 1024) {
-          saved.textContent = t('markdown.exportFailed', { error: String(locale || '').toLowerCase().startsWith('en') ? '2 MB max' : '2 Mo max' });
+        if (_expBytes > MAX_STATE_BYTES) {
+          saved.textContent = t('markdown.exportFailed', { error: t('markdown.maxSize', { max: Math.round(MAX_STATE_BYTES / (1024 * 1024)) }) });
           ctx.ui.log('markdown: export refusé (>2 Mo)');
           return;
         }
-        await ctx.fs.writeSharedText(`${safe}.md`, d.content || '');
-        saved.textContent = t('markdown.exportedTo', { name: `${safe}.md` });
-        ctx.ui.log(`markdown: export ${safe}.md`);
-        ctx.ui.toast(t('markdown.exportedToast', { name: `${safe}.md` }));
+        // Partage/ est l'espace d'échange : on n'ÉCRASE pas un fichier
+        // portant déjà ce nom (contrat : « never overwrite »), on suffixe.
+        let dest = `${safe}.md`;
+        let k = 2;
+        while (await ctx.fs.existsShared(dest)) dest = `${safe} (${k++}).md`;
+        await ctx.fs.writeSharedText(dest, d.content || '');
+        saved.textContent = t('markdown.exportedTo', { name: dest });
+        ctx.ui.log(`markdown: export ${dest}`);
+        ctx.ui.toast(t('markdown.exportedToast', { name: dest }));
       } catch (err) {
         saved.textContent = t('markdown.exportFailed', { error: err.message });
       }
     };
 
     async function persist() {
+      if (loadError) {
+        saved.textContent = t('markdown.loadFailed', { error: loadError.message });
+        return;
+      }
       try {
         const _bytes = new TextEncoder().encode(JSON.stringify(data)).length;
-        if (_bytes > 2 * 1024 * 1024) {
-          saved.textContent = t('markdown.saveFailed', { error: String(locale || '').toLowerCase().startsWith('en') ? '2 MB max' : '2 Mo max' });
-          ctx.ui.log('markdown: quota 2 Mo dépassé, persist refusé');
+        if (_bytes > MAX_STATE_BYTES) {
+          // Message dans la langue de l'app (plus de test 'en' sur le locale :
+          // ctx.i18n.lang est la source de vérité, ctx.i18n.locale non).
+          saved.textContent = t('markdown.saveFailed', { error: t('markdown.maxSize', { max: Math.round(MAX_STATE_BYTES / (1024 * 1024)) }) });
+          ctx.ui.log('markdown: quota 2 Mo dépassé, persist refusé', 'warn');
           return;
         }
         await ctx.fs.writeJSON(STATE_FILE, data);
@@ -177,8 +202,11 @@ const USBosApp = {
     function select(id) {
       const d = data.docs.find((x) => x.id === id);
       if (!d) return;
-      current = id; titleIn.value = d.name; editor.value = d.content;
-      previewEl.innerHTML = mdRender(d.content);
+      current = id; titleIn.value = d.name || '';
+      // Un document sans `content` (fichier d'état ancien ou importé) affichait
+      // littéralement "undefined" dans l'éditeur ET dans l'aperçu.
+      editor.value = typeof d.content === 'string' ? d.content : '';
+      if (preview) previewEl.innerHTML = mdRender(editor.value);
       renderList();
     }
 
@@ -211,7 +239,22 @@ const USBosApp = {
     saveBtn.onclick = async () => {
       if (!current) return;
       const d = data.docs.find((x) => x.id === current);
-      if (d) { d.name = titleIn.value.trim().slice(0, 200) || d.name; d.content = editor.value.slice(0, 500000); d.updated = Date.now(); }
+      if (d) {
+        d.name = titleIn.value.trim().slice(0, 200) || d.name;
+        // Troncature VISIBLE : avant, tout au-delà de 500 000 caractères
+        // disparaissait alors que l'UI annonçait « Enregistré ».
+        if (editor.value.length > MAX_DOC_CHARS) {
+          d.content = editor.value.slice(0, MAX_DOC_CHARS);
+          d.updated = Date.now();
+          editor.value = d.content;
+          await persist(); renderList();
+          saved.textContent = t('markdown.truncated', { max: MAX_DOC_CHARS });
+          ctx.ui.log(`markdown: document tronqué à ${MAX_DOC_CHARS} caractères`, 'warn');
+          return;
+        }
+        d.content = editor.value;
+        d.updated = Date.now();
+      }
       await persist(); renderList();
     };
     prevBtn.onclick = () => { preview = !preview; prevBtn.textContent = preview ? t('markdown.edit') : t('markdown.preview'); renderEditor(); };
@@ -237,7 +280,7 @@ const USBosApp = {
       if (!preview) return;
       clearTimeout(previewTimer);
       previewTimer = setTimeout(() => {
-        if (preview) previewEl.innerHTML = mdRender(editor.value.slice(0, 500000));
+        if (preview) previewEl.innerHTML = mdRender(editor.value.slice(0, MAX_DOC_CHARS));
       }, 150);
     });
     searchIn.addEventListener('input', renderList);
@@ -280,11 +323,23 @@ const USBosApp = {
           try {
             const text = await ctx.fs.readSharedText(f.name);
             const base = String(f.name || '').replace(/\.md$/i, '').slice(0, 200) || t('markdown.defaultTitle');
-            data.docs.unshift({ id: newId(), name: base, content: String(text || '').slice(0, 500000), updated: Date.now() });
+            // Import : jamais d'ÉCRASEMENT silencieux. Le contrat recommande
+            // « merge » : un nom déjà pris reçoit un suffixe, sinon importer
+            // deux fois le même .md depuis Partage/ perdait le premier.
+            let name = base;
+            let n = 2;
+            while (data.docs.some((d) => d.name === name)) name = `${base} (${n++})`;
+            const clipped = String(text || '');
+            const truncated = clipped.length > MAX_DOC_CHARS;
+            data.docs.unshift({ id: newId(), name, content: clipped.slice(0, MAX_DOC_CHARS), updated: Date.now() });
             await persist();
             select(data.docs[0].id);
             saved.textContent = t('markdown.imported', { name: String(f.name || '') });
             ctx.ui.toast(t('markdown.imported', { name: String(f.name || '') }));
+            if (truncated) {
+              ctx.ui.log(`markdown: import tronqué à ${MAX_DOC_CHARS} caractères (${f.name})`, 'warn');
+              saved.textContent = `${saved.textContent} · ${t('markdown.truncated', { max: MAX_DOC_CHARS })}`;
+            }
             ctx.ui.log(`markdown: import ${f.name}`);
             sharedBox.hidden = true; sharedBox.innerHTML = '';
           } catch (err) {

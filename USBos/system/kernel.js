@@ -7,7 +7,7 @@
  */
 'use strict';
 
-const KERNEL_VERSION = '2.4.0.3';
+const KERNEL_VERSION = '2.4.0.5';
 const DB_NAME = 'usbos-kernel';
 const DB_STORE = 'handles';
 const DB_KEY = 'root';
@@ -1518,7 +1518,20 @@ async function loadInstalledApps() {
         log(`App ${id} : id du manifeste incohérent, ignorée`, 'w');
         continue;
       }
-      state.apps.set(id, { manifest, instance: null });
+      // Chaque app porte ses propres traductions (apps:<id>/lang/{fr,en}.json).
+      // Best-effort : une app sans lang/ (ou avec un fichier manquant/invalide)
+      // se charge quand même, avec ce dictionnaire vide pour la langue en
+      // cause — ses textes retombent alors sur la clé brute plutôt que de
+      // bloquer l'app entière.
+      const lang = {};
+      for (const code of LANG_BUILTIN) {
+        try {
+          lang[code] = await state.vfs.readJSON(`apps:${id}/lang/${code}.json`);
+        } catch (err) {
+          log(`App ${id} : lang/${code}.json manquant ou illisible (${err.message})`, 'w');
+        }
+      }
+      state.apps.set(id, { manifest, instance: null, lang });
     } catch (err) {
       log(`App ${id} : manifest.json illisible (${err.message})`, 'w');
     }
@@ -1995,10 +2008,19 @@ function buildSandboxSrcdoc(id, manifest, code) {
   const uip = currentUiPrefs();
   const appLang = currentLang();
   // L'iframe reçoit son namespace + shell (erreurs communes, ex. échec de montage).
+  // Le namespace de l'app vient de SES PROPRES fichiers (apps:<id>/lang/*.json,
+  // chargés par loadInstalledApps) — le noyau ne porte plus les traductions
+  // des apps, seulement "shell"/"console". Un pack de langue communautaire
+  // (config:lang/*.json, langue non native) peut encore surcharger le
+  // namespace d'une app pour cette langue précise, à l'ancienne.
   const fullDict = (((state.dicts || {})[appLang] || {}).dict || {});
   const fullFallback = ((((state.dicts || {}).en || {}).dict || {}));
-  const appDict = { ...(fullDict[id] || {}), shell: fullDict.shell || {} };
-  const appFallback = { ...(fullFallback[id] || {}), shell: fullFallback.shell || {} };
+  const appLangs = ((state.apps.get(id) || {}).lang || {});
+  const ownDict = appLangs[appLang] || appLangs.fr || {};
+  const ownFallback = appLangs.en || appLangs.fr || {};
+  const communityOverride = fullDict[id]; // ancien format, pack tiers uniquement
+  const appDict = { [id]: communityOverride || ownDict, shell: fullDict.shell || {} };
+  const appFallback = { [id]: ownFallback, shell: fullFallback.shell || {} };
   const i18nLangJson = escapeForInlineScript(JSON.stringify(appLang));
   const i18nLocaleJson = escapeForInlineScript(JSON.stringify(langLocale()));
   const i18nDictJson = escapeForInlineScript(JSON.stringify(appDict));

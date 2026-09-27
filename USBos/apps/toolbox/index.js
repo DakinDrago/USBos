@@ -63,8 +63,11 @@ function genPassword(len, opts) {
   for (let i = out.length - 1; i > 0; i--) { const j = randInt(i + 1); [out[i], out[j]] = [out[j], out[i]]; }
   return out.join('');
 }
-function humanSize(n, locale) {
-  const isEn = String(locale || '').toLowerCase().startsWith('en');
+function humanSize(n, lang) {
+  // Source de vérité = ctx.i18n.lang (le code), pas ctx.i18n.locale : les deux
+  // peuvent différer pour un pack custom, et l'ancien test
+  // startsWith('en') sur le locale donnait parfois la mauvaise langue.
+  const isEn = String(lang || 'fr').toLowerCase().startsWith('en');
   const units = isEn ? ['B', 'KB', 'MB', 'GB', 'TB'] : ['o', 'Ko', 'Mo', 'Go', 'To'];
   let i = 0;
   while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
@@ -78,10 +81,16 @@ function copyBtn(getValue, t) {
       if (navigator.clipboard && window.isSecureContext !== false) {
         await navigator.clipboard.writeText(v);
       } else {
-        // Repli sans Clipboard API (contexte non sécurisé) : sélection manuelle.
+        // Repli sans Clipboard API (contexte non sécurisé) : sélection manuelle,
+        // dans l'app (le contrat interdit de toucher au document parent).
         const ta = document.createElement('textarea');
-        ta.value = v; document.body.append(ta); ta.select();
-        document.execCommand('copy'); ta.remove();
+        ta.value = v; ta.setAttribute('aria-hidden', 'true');
+        ta.style.cssText = 'position:absolute;left:-9999px;opacity:0';
+        (b.parentNode || b.ownerDocument.body).append(ta); ta.select();
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch { ok = false; }
+        ta.remove();
+        if (!ok) throw new Error('execCommand');
       }
       b.textContent = t('toolbox.copied'); setTimeout(() => { b.textContent = t('toolbox.copy'); }, 1200);
     } catch { b.textContent = t('toolbox.copyFailed'); }
@@ -96,8 +105,24 @@ const USBosApp = {
     const t = ctx.i18n.t;
     const locale = ctx.i18n.locale;
 
+    // Préférences VALIDÉES au chargement : un fichier.edité à la main (ou
+    // d'une version ancienne) avec {"len":0} faisait retourner à genPassword
+    // les 4 caractères d'amorce, pendant que l'UI annonçait « Longueur : 0 ».
     let prefs = { len: 16, lower: true, upper: true, digits: true, symbols: true };
-    try { prefs = Object.assign(prefs, await ctx.fs.readJSON(PREFS_FILE)); } catch { /* premier lancement */ }
+    try {
+      const raw = await ctx.fs.readJSON(PREFS_FILE);
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        prefs = Object.assign(prefs, raw);
+      } else if (raw != null) {
+        ctx.ui.log('toolbox: preferences illisibles (objet attendu), valeurs par défaut', 'warn');
+      }
+    } catch (err) {
+      if (!err || err.name !== 'NotFoundError') {
+        ctx.ui.log(`toolbox: preferences illisibles (${err.message}), valeurs par défaut`, 'warn');
+      }
+    }
+    prefs.len = Math.min(64, Math.max(6, parseInt(prefs.len, 10) || 16));
+    for (const k of ['lower', 'upper', 'digits', 'symbols']) prefs[k] = prefs[k] !== false;
 
     const panels = new Map();
     const tabs = el('div', 'tabs');
@@ -150,6 +175,11 @@ const USBosApp = {
       try {
         const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(shaIn.value));
         shaOut.textContent = Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, '0')).join('');
+      } catch (err) {
+        // try/finally SANS catch : toute erreur (texte colossal -> RangeError
+        // ou quota) devenait un rejet non géré, sans aucun message.
+        shaOut.textContent = t('toolbox.shaError', { error: err && err.message ? err.message : String(err) });
+        ctx.ui.log(`toolbox: SHA impossible (${err && err.message})`, 'warn');
       } finally { shaBtn.disabled = false; }
     };
 
@@ -164,7 +194,7 @@ const USBosApp = {
 
     const convBytesIn = el('input'); convBytesIn.type = 'number'; convBytesIn.placeholder = t('toolbox.bytesPh');
     const convBytesOut = el('div', 'out', '—');
-    convBytesIn.oninput = () => { const v = parseFloat(convBytesIn.value); convBytesOut.textContent = (isNaN(v) || v < 0) ? '—' : t('toolbox.bytesOut', { v, h: humanSize(v, locale) }); };
+    convBytesIn.oninput = () => { const v = parseFloat(convBytesIn.value); convBytesOut.textContent = (isNaN(v) || v < 0) ? '—' : t('toolbox.bytesOut', { v, h: humanSize(v, ctx.i18n.lang) }); };
 
     const convHexIn = el('input'); convHexIn.placeholder = t('toolbox.hexPh');
     const convHexOut = el('div', 'out', '—');

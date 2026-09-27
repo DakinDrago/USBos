@@ -7,6 +7,9 @@
 const STATE_FILE = 'agenda.json';
 const MAX_EVENTS = 5000;
 const MAX_IMPORT_BYTES = 2 * 1024 * 1024;
+// Plafond texte du pont RPC (écriture shared) : le noyau refuse au-delà, donc
+// l'app annonce la même limite au lieu de laisser croire que l'export passe.
+const MAX_SHARED_TEXT_BYTES = 2 * 1024 * 1024;
 
 const STYLE = `
 .agenda-app{width:100%;flex:1;min-height:0;display:flex;flex-direction:column;overflow-x:auto;padding:2px}
@@ -192,7 +195,13 @@ function icsEscape(s) {
   return String(s ?? '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r\n|\r|\n/g, '\\n');
 }
 function icsUnescape(s) {
-  return String(s ?? '').replace(/\\N/g, '\n').replace(/\\n/g, '\n').replace(/\\;/g, ';').replace(/\\,/g, ',').replace(/\\\\/g, '\\');
+  // UN SEUL passage gauche-droite. Les replacements successifs
+  // (/\\n/g puis /\\\\/g) étaient faux : une chaîne contenant un antislash
+  // littéral (« C:\\new ») voyait son DEUXIÈME antislash matcher /\\n/, et le
+  // texte devenait « C: <LF> ew ».
+  return String(s ?? '').replace(/\\([\\;,Nn])/g, (_, c) => (
+    c === 'n' || c === 'N' ? '\n' : c
+  ));
 }
 
 // Pliage à 75 octets (continuation = CRLF + espace), sans couper un caractère.
@@ -364,6 +373,10 @@ function sanitizeEvent(e, t) {
     desc: String(e.desc || '').slice(0, 2000),
     loc: String(e.loc || '').slice(0, 200),
     done: !!e.done,
+    // Conservé au rechargement : importé puis affiché, il disparaissait au
+    // prochain montage (le champ entrait dans le fichier mais sortait du
+    // modèle en mémoire, et le save suivant l'effaçait pour de bon).
+    foreignTz: e.foreignTz ? String(e.foreignTz).slice(0, 64) : '',
   };
 }
 
@@ -377,21 +390,33 @@ const USBosApp = {
     const TZ = detectTZ();
 
     let data;
-    try { data = await ctx.fs.readJSON(STATE_FILE); } catch { /* premier lancement */ }
+    // Lecture ratée != premier lancement : les écritures VFS ne sont pas
+    // atomiques. Reprendre un agenda vide affichait une liste vierge, et le
+    // persist() suivant ÉCRASSAIT le fichier réel.
+    let loadError = null;
+    try { data = await ctx.fs.readJSON(STATE_FILE); }
+    catch (err) {
+      if (err && err.name === 'NotFoundError') data = null;
+      else { loadError = err; data = null; ctx.ui.log(`agenda: lecture impossible (${err.message}) — enregistrement bloqué`, 'error'); }
+    }
     if (!data || typeof data !== 'object') data = { version: 2, events: [] };
     if (data.version !== 2 || !Array.isArray(data.events)) {
       const migrated = migrateV1(data, t);
       data = migrated;
-      try { await ctx.fs.writeJSON(STATE_FILE, data); } catch { /* persisté au prochain save */ }
+      // Une migration ne s'écrit QUE si la lecture a réussi : sinon on
+      // remplacerait un fichier intact par une version « migrée » vide.
+      if (!loadError) {
+        try { await ctx.fs.writeJSON(STATE_FILE, data); } catch { /* persisté au prochain save */ }
+      }
       ctx.ui.log(`agenda: migration v1 -> v2 (${data.events.length} événement(s))`);
     }
     const _rawLen = Array.isArray(data.events) ? data.events.length : 0;
     let events = (data.events || []).map((e) => sanitizeEvent(e, t)).filter(Boolean).slice(0, MAX_EVENTS);
-    if (_rawLen > MAX_EVENTS) ctx.ui.log(`agenda: liste tronquée à ${MAX_EVENTS} événements (quota)`);
+    if (_rawLen > MAX_EVENTS) ctx.ui.log(`agenda: liste tronquée à ${MAX_EVENTS} événements (quota)`, 'warn');
 
     let view = 'month'; // month | week | day
     let cursor = todayISO();
-    let editingId = null; // null = création, undefined = formulaire fermé
+    let editingId = null;  // null = création / fermé (désambiguïsé par formOpen)
     let formOpen = false;
     let saveCurrent = null; // bouton save du formulaire visible (Ctrl+S)
     let onDoc = null;
@@ -400,13 +425,17 @@ const USBosApp = {
 
     const saved = el('div', 'saved');
     async function persist() {
+      if (loadError) {
+        saved.textContent = t('agenda.loadFailed', { error: loadError.message });
+        return;
+      }
       try {
         await ctx.fs.writeJSON(STATE_FILE, { version: 2, events });
         saved.textContent = t('agenda.savedAt', { time: new Date().toLocaleTimeString(locale) });
         ctx.ui.log(`agenda: ${events.length} événement(s) écrits`);
       } catch (err) {
         saved.textContent = t('agenda.saveFailed', { error: err.message });
-        ctx.ui.log('agenda: échec persist (' + err.message + ')');
+        ctx.ui.log('agenda: échec persist (' + err.message + ')', 'error');
       }
     }
 
@@ -448,12 +477,15 @@ const USBosApp = {
 
     function renderSearch(q) {
       body.innerHTML = '';
-      const hits = events
+      // Le compteur porte sur le TOTAL des correspondances, pas sur la
+      // tranche affichée : il lisait hits.length APRÈS le slice(0, 100) et
+      // n'annonçait donc jamais plus de 100.
+      const all = events
         .filter((e) => `${e.title || ''}\n${e.loc || ''}\n${e.desc || ''}`.toLowerCase().includes(q))
-        .sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.allDay ? '' : a.start || '99').localeCompare(b.allDay ? '' : b.start || '99'))
-        .slice(0, 100);
-      body.append(el('div', 'count', t('agenda.results', { n: hits.length })));
-      if (!hits.length) { body.append(el('div', 'empty', t('agenda.noResult'))); return; }
+        .sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.allDay ? '' : a.start || '99').localeCompare(b.allDay ? '' : b.start || '99'));
+      const hits = all.slice(0, 100);
+      body.append(el('div', 'count', tp('agenda.results', all.length)));
+      if (!all.length) { body.append(el('div', 'empty', t('agenda.noResult'))); return; }
       for (const e of hits) {
         const row = el('div', 'item' + (e.done ? ' done' : ''));
         row.append(el('span', 'tm', e.date.slice(5).replace('-', '/') + ' ' + fmtWhen(e)));
@@ -472,7 +504,7 @@ const USBosApp = {
       for (const [k, label] of [['month', t('agenda.tabMonth')], ['week', t('agenda.tabWeek')], ['day', t('agenda.tabDay')]]) {
         const b = el('button', 'tab' + (view === k ? ' active' : ''), label);
         b.type = 'button';
-        b.onclick = () => { view = k; formOpen = false; editingId = undefined; renderAll(); };
+        b.onclick = () => { view = k; closeForm(); renderAll(); };
         tabs.append(b);
       }
     }
@@ -596,16 +628,16 @@ const USBosApp = {
     const endIn = el('input'); endIn.type = 'time';
     const locIn = el('input'); locIn.type = 'text'; locIn.placeholder = t('agenda.locPh');
     const descIn = el('textarea'); descIn.placeholder = t('agenda.descPh');
-    function renderForm() {
-      const f = el('form', 'ev');
-      const head = el('div', 'row');
-      const toggleBtn = el('button', 'mini', formOpen ? t('agenda.close') : t('agenda.newEvent'));
-      toggleBtn.type = 'button';
-      toggleBtn.onclick = () => { formOpen = !formOpen; editingId = null; renderAll(); };
-      head.append(toggleBtn);
-      if (editingId) head.append(el('span', 'hint', t('agenda.editing')));
-      f.append(head);
-      if (!formOpen && !editingId) { body.append(f); return; }
+    // Clé pour laquelle les champs ont DÉJÀ été initialisés. Avant, chaque
+    // rendu réécrivait les champs : cocher une case, changer de jour ou
+    // d'onglet effaçait la saisie en cours, et les modifications non
+    // enregistrées d'un événement existant étaient revertées en silence.
+    let formSeededFor = null;
+    function closeForm() { formOpen = false; editingId = null; formSeededFor = null; }
+    function seedForm() {
+      const key = editingId ? `edit:${editingId}` : `new:${cursor}`;
+      if (formSeededFor === key) return;
+      formSeededFor = key;
       if (editingId) {
         const e = events.find((x) => x.id === editingId);
         if (e) {
@@ -616,6 +648,28 @@ const USBosApp = {
       } else {
         titleIn.value = ''; dateIn.value = cursor; allDayIn.checked = false;
         startIn.value = ''; endIn.value = ''; locIn.value = ''; descIn.value = '';
+      }
+    }
+    function renderForm() {
+      const f = el('form', 'ev');
+      const head = el('div', 'row');
+      const toggleBtn = el('button', 'mini', formOpen ? t('agenda.close') : t('agenda.newEvent'));
+      toggleBtn.type = 'button';
+      toggleBtn.onclick = () => { if (formOpen) closeForm(); else { formOpen = true; editingId = null; } renderAll(); };
+      head.append(toggleBtn);
+      if (editingId) head.append(el('span', 'hint', t('agenda.editing')));
+      f.append(head);
+      if (!formOpen && !editingId) { body.append(f); return; }
+      // Événement supprimé depuis le même écran (bouton Suppr de sa ligne) :
+      // on rebascule en création au lieu d'afficher un formulaire fantôme dont
+      // le bouton « Mettre à jour » ne faisait que le fermer.
+      if (editingId && !events.some((x) => x.id === editingId)) {
+        ctx.ui.log('agenda: événement supprimé, retour au formulaire de création', 'warn');
+        closeForm();
+        formOpen = true;
+        seedForm();
+      } else {
+        seedForm();
       }
       const syncTime = () => { startIn.disabled = allDayIn.checked; endIn.disabled = allDayIn.checked; };
       allDayIn.onchange = syncTime; syncTime();
@@ -629,30 +683,47 @@ const USBosApp = {
       const save = el('button', 'save', editingId ? t('agenda.update') : t('agenda.add')); save.type = 'button';
       saveCurrent = save;
       const cancel = el('button', 'mini', t('agenda.cancel')); cancel.type = 'button';
-      cancel.onclick = () => { formOpen = false; editingId = undefined; renderAll(); };
+      cancel.onclick = () => { closeForm(); renderAll(); };
       save.onclick = async () => {
         const title = titleIn.value.trim().slice(0, 200);
-        if (!title || !parseISODate(dateIn.value)) return;
+        const date = dateIn.value;
+        if (!title) {
+          // Silence avant : le clic ne faisait rien, sans aucun retour.
+          saved.textContent = t('agenda.needTitle');
+          titleIn.focus();
+          return;
+        }
+        if (!parseISODate(date)) {
+          saved.textContent = t('agenda.needDate');
+          dateIn.focus();
+          return;
+        }
         const allDay = allDayIn.checked || !isValidTime(startIn.value);
         let end = isValidTime(endIn.value) ? endIn.value : '';
         if (end && (!isValidTime(startIn.value) || end <= startIn.value)) end = '';
-        if (events.length >= MAX_EVENTS && !editingId) { ctx.ui.log(`agenda: quota ${MAX_EVENTS} événements atteint, création refusée`); return; }
+        if (events.length >= MAX_EVENTS && !editingId) {
+          const msg = t('agenda.quotaReached', { max: MAX_EVENTS });
+          saved.textContent = msg;
+          try { ctx.ui.toast(msg); } catch { /* noop */ }
+          ctx.ui.log(`agenda: quota ${MAX_EVENTS} événements atteint, création refusée`, 'warn');
+          return;
+        }
         if (editingId) {
           const e = events.find((x) => x.id === editingId);
           if (e) Object.assign(e, {
-            title, date: dateIn.value, allDay,
+            title, date, allDay,
             start: allDay ? '' : startIn.value, end: allDay ? '' : end,
             loc: locIn.value.trim().slice(0, 200), desc: descIn.value.slice(0, 2000),
           });
-          editingId = undefined; formOpen = false;
+          closeForm();
         } else {
           events.push({
-            id: newId(), uid: `${newId()}@usbos`, title, date: dateIn.value, allDay,
+            id: newId(), uid: `${newId()}@usbos`, title, date, allDay,
             start: allDay ? '' : startIn.value, end: allDay ? '' : end,
             loc: locIn.value.trim().slice(0, 200), desc: descIn.value.slice(0, 2000), done: false,
           });
-          cursor = dateIn.value;
-          formOpen = false;
+          cursor = date;
+          closeForm();
         }
         await persist(); renderAll();
       };
@@ -687,14 +758,18 @@ const USBosApp = {
     expSharedBtn.title = t('agenda.expSharedTitle');
     expSharedBtn.onclick = async () => {
       try {
-        const name = `agenda-${todayISO()}.ics`;
         const text = icsExport(events, TZ, t);
-        if (new TextEncoder().encode(text).length > 2 * 1024 * 1024) {
+        if (new TextEncoder().encode(text).length > MAX_SHARED_TEXT_BYTES) {
           ioMsg.className = 'msg err';
-          ioMsg.textContent = t('agenda.exportFailed', { error: String(locale || '').toLowerCase().startsWith('en') ? '2 MB max' : '2 Mo max' });
-          ctx.ui.log('agenda: export Partage refusé (>2 Mo)');
+          ioMsg.textContent = t('agenda.exportFailed', { error: t('agenda.maxText', { max: Math.round(MAX_SHARED_TEXT_BYTES / (1024 * 1024)) }) });
+          ctx.ui.log('agenda: export Partage refusé (>2 Mo)', 'warn');
           return;
         }
+        // Jamais d'écrasement dans Partage/ : suffixe si le nom est pris
+        // (le contrat l'impose, et l'export est un dépôt pour l'extérieur).
+        let name = `agenda-${todayISO()}.ics`;
+        let k = 2;
+        while (await ctx.fs.existsShared(name)) name = `agenda-${todayISO()}-${k++}.ics`;
         await ctx.fs.writeSharedText(name, text);
         ioMsg.className = 'msg ok';
         ioMsg.textContent = t('agenda.exportedTo', { name });
@@ -719,6 +794,12 @@ const USBosApp = {
       const fresh = res.events.filter((e) => !known.has(e.uid));
       const dups = res.events.length - fresh.length;
       if (fresh.length === 0) {
+        // Arms RESETÉS : sans ça, une seconde tentative ne trouvant que des
+        // doublons laissait la confirmation PRÉCÉDENTE armée -> le clic
+        // « Importer » appliquait l'ancien fichier.
+        pendingImport = null;
+        confirmBox.hidden = true;
+        confirmBox.innerHTML = '';
         ioMsg.className = 'msg';
         ioMsg.textContent = t('agenda.nothingToImport', { dups, skipped: res.skipped });
         return;
@@ -733,13 +814,20 @@ const USBosApp = {
         (res.skipped ? t('agenda.confirmSkipped', { n: res.skipped }) : '')));
       const ok = el('button', 'save', t('agenda.import')); ok.type = 'button';
       ok.onclick = async () => {
-        const _combined = events.length + pendingImport.length;
-        events = [...events, ...pendingImport].slice(0, MAX_EVENTS);
-        if (_combined > MAX_EVENTS) ctx.ui.log(`agenda: import truncated to ${MAX_EVENTS} events (quota)`);
+        const batch = pendingImport || [];
+        const combined = events.length + batch.length;
+        const room = Math.max(0, MAX_EVENTS - events.length);
+        events = [...events, ...batch.slice(0, room)];
+        const dropped = combined - events.length;
         pendingImport = null; confirmBox.hidden = true; confirmBox.innerHTML = '';
         await persist(); renderAll();
         ioMsg.className = 'msg ok';
-        ioMsg.textContent = t('agenda.importDone');
+        // La troncature par quota est ANNONCÉE : « Import terminé » seul
+        // laissait croire que le fichier entier était passé.
+        ioMsg.textContent = dropped
+          ? t('agenda.importTruncated', { n: events.length, dropped })
+          : t('agenda.importDone');
+        if (dropped) ctx.ui.log(`agenda: import tronqué (${dropped} événement(s) au-delà du quota ${MAX_EVENTS})`, 'warn');
         ctx.ui.toast(t('agenda.importToast'));
       };
       const no = el('button', 'mini', t('agenda.cancel')); no.type = 'button';
@@ -832,12 +920,11 @@ const USBosApp = {
       const f = el('form', 'ev');
       const toggleBtn = el('button', 'mini', formOpen ? t('agenda.close') : t('agenda.newEvent'));
       toggleBtn.type = 'button';
-      toggleBtn.onclick = () => { formOpen = !formOpen; editingId = null; renderAll(); };
+      toggleBtn.onclick = () => { if (formOpen) closeForm(); else { formOpen = true; editingId = null; } renderAll(); };
       const head = el('div', 'row'); head.append(toggleBtn);
       f.append(head);
       if (formOpen) {
-        titleIn.value = ''; dateIn.value = cursor; allDayIn.checked = false;
-        startIn.value = ''; endIn.value = ''; locIn.value = ''; descIn.value = '';
+        seedForm(); // idem renderForm : pas d'effacement à chaque rendu
         const syncTime = () => { startIn.disabled = allDayIn.checked; endIn.disabled = allDayIn.checked; };
         allDayIn.onchange = syncTime; syncTime();
         titleIn.className = 'grow';
@@ -851,16 +938,26 @@ const USBosApp = {
         saveCurrent = save;
         save.onclick = async () => {
           const title = titleIn.value.trim().slice(0, 200);
-          if (!title || !parseISODate(dateIn.value) || events.length >= MAX_EVENTS) { if (events.length >= MAX_EVENTS) ctx.ui.log(`agenda: quota ${MAX_EVENTS} événements atteint, création refusée`); return; }
+          const date = dateIn.value;
+          if (!title) { saved.textContent = t('agenda.needTitle'); titleIn.focus(); return; }
+          if (!parseISODate(date)) { saved.textContent = t('agenda.needDate'); dateIn.focus(); return; }
+          if (events.length >= MAX_EVENTS) {
+            const msg = t('agenda.quotaReached', { max: MAX_EVENTS });
+            saved.textContent = msg;
+            try { ctx.ui.toast(msg); } catch { /* noop */ }
+            ctx.ui.log(`agenda: quota ${MAX_EVENTS} événements atteint, création refusée`, 'warn');
+            return;
+          }
           const allDay = allDayIn.checked || !isValidTime(startIn.value);
           let end = isValidTime(endIn.value) ? endIn.value : '';
           if (end && (!isValidTime(startIn.value) || end <= startIn.value)) end = '';
           events.push({
-            id: newId(), uid: `${newId()}@usbos`, title, date: dateIn.value, allDay,
+            id: newId(), uid: `${newId()}@usbos`, title, date, allDay,
             start: allDay ? '' : startIn.value, end: allDay ? '' : end,
             loc: locIn.value.trim().slice(0, 200), desc: descIn.value.slice(0, 2000), done: false,
           });
-          cursor = dateIn.value; formOpen = false;
+          cursor = date;
+          closeForm();
           await persist(); renderAll();
         };
         f.onsubmit = (ev) => { ev.preventDefault(); save.click(); };
@@ -873,17 +970,25 @@ const USBosApp = {
     const helpLine = el('div', 'hint', t('agenda.helpLine'));
     wrap.append(helpLine, io, sharedBox, confirmBox, saved);
     stage.append(wrap);
-    renderAll();
+    // Cleanup enregistré AVANT le premier rendu : si renderAll() lève, le
+    // handler 'keydown' restait attaché (et jamais retiré, l'app étant
+    // considérée comme montée).
+    let agendaCleanup = () => {
+      if (onDoc) document.removeEventListener('keydown', onDoc);
+      for (const tm of delTimers) clearTimeout(tm);
+      delTimers.clear();
+      for (const u of blobUrls) { try { URL.revokeObjectURL(u); } catch { /* noop */ } }
+      blobUrls.clear();
+      saveCurrent = null;
+    };
+    this._agendaCleanup = agendaCleanup;
     try {
-      this._agendaCleanup = () => {
-        if (onDoc) document.removeEventListener('keydown', onDoc);
-        for (const tm of delTimers) clearTimeout(tm);
-        delTimers.clear();
-        for (const u of blobUrls) { try { URL.revokeObjectURL(u); } catch { /* noop */ } }
-        blobUrls.clear();
-        saveCurrent = null;
-      };
-    } catch { /* noop */ }
+      renderAll();
+    } catch (err) {
+      // L'app reste montée mais l'erreur est visible plutôt que muette.
+      ctx.ui.log(`agenda: rendu initial impossible (${err.message})`, 'error');
+      body.append(el('div', 'empty', t('agenda.renderFailed', { error: err.message })));
+    }
   },
   async unmount() { if (this && this._agendaCleanup) { try { this._agendaCleanup(); } catch { /* noop */ } this._agendaCleanup = null; } },
 }
