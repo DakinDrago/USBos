@@ -1,18 +1,5 @@
 /*
- * USBos app: mesh — "un LocalSend/Discord entre clés USBos".
- * Connexion directe pair-à-pair (WebRTC via PeerJS, signalisation publique
- * gratuite du projet PeerJS). Pas de scan QR : on partage un code court
- * (l'identifiant de la clé) à la voix/texte, comme un pseudo LocalSend.
- * La lib PeerJS est chargée depuis apps/mesh/vendor/ (asset statique de
- * l'app, jamais depuis le kernel).
- *
- * Salons de groupe (maillage complet) : un salon a un code GRP-123456 + un
- * nom. Chaque membre se connecte à tous les autres ; les listes de membres
- * sont échangées dans les poignées de main (hello/welcome) et les manquants
- * sont proposés en connexion 1-clic. Chaque connexion entrante reste
- * acceptée manuellement (avec le contexte du salon). Les messages/fichiers
- * sont taggés {group} ou diffusés à tous. Compat mixte : un pair en 1.2.0
- * reçoit les champs inconnus sans les afficher (repli 1:1).
+ * USBos app: mesh
  */
 const CONFIG_FILE = 'mesh.json';
 

@@ -1,4 +1,6 @@
-/* USBos app: toolbox — porté depuis le module original, adapté au contrat v2. */
+/*
+ * USBos app: toolbox
+ */
 const PREFS_FILE = 'toolbox.json';
 
 const STYLE = `

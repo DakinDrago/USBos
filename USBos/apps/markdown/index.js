@@ -1,4 +1,6 @@
-/* USBos app: markdown — porté depuis le module original, adapté au contrat v2. */
+/*
+ * USBos app: markdown
+ */
 const STATE_FILE = 'markdown.json';
 
 const STYLE = `

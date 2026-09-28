@@ -1,10 +1,5 @@
 /*
  * USBos — system/logbus.js
- * Journal noyau façon dmesg/syslog : buffer circulaire en mémoire, niveaux,
- * export vers un fichier réel, miroir console.* coloré. Source unique de
- * vérité utilisée par le kernel, le VFS, l'updater, le pont RPC des apps
- * et la carte Alertes du dashboard. Affiché dans la console DevTools
- * (miroir temps réel + bouton « Journal » = récapitulatif à la demande).
  */
 'use strict';
 

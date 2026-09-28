@@ -1,27 +1,18 @@
 /*
  * USBos — system/vfs.js
- * Couche VFS : encapsule FileSystemDirectoryHandle et expose des chemins
- * standardisés (system:, apps:, data:, config:, update:) plutôt que des
- * chemins relatifs fragiles.
- *
- * Aucune app n'accède jamais directement à un FileSystemDirectoryHandle :
- * tout passe par cette API.
+ * Virtual file system over FileSystemDirectoryHandle.
+ * Schemes: system:, apps:, data:, config:, update:, shared:, root:
  */
 'use strict';
 
 const ROOT_DIRS = ['system', 'apps', 'data', 'config', '.update'];
-
-// Caractères interdits sur FAT32/exFAT (clés USB) + séparateurs ambigus.
 const BAD_NAME_CHARS = /[<>:"|?*\x00-\x1f\\]/;
-
 const RESERVED_WIN_NAMES = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\..*)?$/i;
 
 function assertSafePart(p) {
   if (typeof p !== 'string') throw new VFSError('Invalid path segment (string expected)', 'BAD_PATH');
   const n = p.normalize('NFC');
   if (n === '.' || n === '..') throw new VFSError(`Forbidden path segment: ${p}`, 'BAD_PATH');
-  // BAD_NAME_CHARS couvre déjà ':' (réservé au schéma VFS) comme les autres
-  // caractères interdits FAT32/exFAT — pas de second test nécessaire ici.
   if (BAD_NAME_CHARS.test(n)) throw new VFSError(`Forbidden file name: ${p}`, 'BAD_PATH');
   if (/[ .]$/.test(n)) throw new VFSError(`Forbidden file name (trailing space/dot, Windows): ${p}`, 'BAD_PATH');
   if (RESERVED_WIN_NAMES.test(n)) throw new VFSError(`Reserved Windows file name: ${p}`, 'BAD_PATH');
@@ -38,17 +29,12 @@ function splitPath(path) {
   return parts;
 }
 
-/**
- * scheme:sous/chemin  ->  { scheme, parts: [...] }
- * ex: "apps:notes/notes.json" -> { scheme: 'apps', parts: ['notes','notes.json'] }
- */
+/** "apps:notes/notes.json" -> { scheme: 'apps', parts: ['notes','notes.json'] } */
 function parseVirtualPath(vpath) {
   if (typeof vpath !== 'string') throw new VFSError('Invalid VFS path (string expected)', 'BAD_PATH');
   const m = vpath.match(/^([a-zA-Z.]+):(.*)$/);
   if (!m) throw new VFSError(`Invalid VFS path (missing scheme): ${vpath}`, 'BAD_PATH');
-  const scheme = m[1];
-  const rest = m[2];
-  return { scheme, parts: splitPath(rest) };
+  return { scheme: m[1], parts: splitPath(m[2]) };
 }
 
 const SCHEME_TO_DIR = {
@@ -57,8 +43,8 @@ const SCHEME_TO_DIR = {
   data: 'data',
   config: 'config',
   update: '.update',
-  shared: null, // racine Partage/ (sibling de USBos/), voir _resolveBaseDir
-  root: null,   // racine USBos/ elle-même (ex. root:index.html), voir _resolveBaseDir
+  shared: null,
+  root: null,
 };
 
 class VFSError extends Error {
@@ -70,10 +56,6 @@ class VFSError extends Error {
 }
 
 class VFS {
-  /**
-   * @param {FileSystemDirectoryHandle} rootHandle dossier "USBos"
-   * @param {FileSystemDirectoryHandle|null} sharedHandle dossier "Partage/" (sibling, en clair)
-   */
   constructor(rootHandle, sharedHandle = null) {
     this.root = rootHandle;
     this.sharedRoot = sharedHandle;
@@ -84,7 +66,6 @@ class VFS {
     try {
       if ((await handle.queryPermission(opts)) === 'granted') return true;
     } catch (err) {
-      // Certains navigateurs lèvent si le handle est révoqué : on tente la demande.
       if (err && err.name === 'SecurityError') throw new VFSError('Permission denied by the browser (insecure context).', 'PERMISSION_DENIED');
     }
     try {
@@ -95,7 +76,6 @@ class VFS {
     }
   }
 
-  /** Crée l'arborescence de base (system/apps/data/config/.update) si absente. */
   async ensureLayout() {
     for (const name of ROOT_DIRS) {
       await this.root.getDirectoryHandle(name, { create: true });
@@ -107,7 +87,7 @@ class VFS {
       if (!this.sharedRoot) throw new VFSError('shared space unavailable — reconnect via the parent folder.', 'SHARED_UNAVAILABLE');
       return this.sharedRoot;
     }
-    if (scheme === 'root') return this.root; // USBos/ elle-même (ex. index.html)
+    if (scheme === 'root') return this.root;
     const dirName = SCHEME_TO_DIR[scheme];
     if (!dirName) throw new VFSError(`Unknown VFS scheme: ${scheme}`, 'BAD_SCHEME');
     return this.root.getDirectoryHandle(dirName, { create });
@@ -156,7 +136,6 @@ class VFS {
     return file.arrayBuffer();
   }
 
-  /** Retourne { size } sans lire le contenu (best-effort, via getFile().size). */
   async stat(vpath) {
     const { dir, name } = await this._resolveParent(vpath);
     const fh = await dir.getFileHandle(name);
@@ -164,7 +143,7 @@ class VFS {
     return { size: file.size };
   }
 
-  /** Écriture non-atomique : pour les fichiers critiques, utiliser un staging + bascule. */
+  // Non-atomic. Use staging + swap for critical files.
   async writeText(vpath, content) {
     const { dir, name } = await this._resolveParent(vpath, true);
     const fh = await dir.getFileHandle(name, { create: true });
@@ -184,7 +163,7 @@ class VFS {
     return this.writeText(vpath, JSON.stringify(obj, null, 2));
   }
 
-  /** Écriture binaire non-atomique : pour les fichiers critiques, utiliser un staging + bascule. */
+  // Non-atomic. Use staging + swap for critical files.
   async writeBinary(vpath, arrayBufferOrBlob) {
     const size = arrayBufferOrBlob && (arrayBufferOrBlob.byteLength ?? arrayBufferOrBlob.size);
     if (size != null && size > 256 * 1024 * 1024) {
@@ -215,10 +194,8 @@ class VFS {
       await resolved.dir.getFileHandle(resolved.name);
       return true;
     } catch (err) {
-      // Erreurs permission/quota : ne pas masquer en "absent".
       if (err && (err.name === 'SecurityError' || err.name === 'NotAllowedError' || err.name === 'QuotaExceededError' || err.name === 'AbortError')) throw err;
       if (err && err.name !== 'NotFoundError' && err.name !== 'TypeMismatchError') throw err;
-      // Un dossier portant ce nom existe peut-être (pas un fichier).
       try { await resolved.dir.getDirectoryHandle(resolved.name); return true; }
       catch (inner) {
         if (inner && inner.name === 'NotFoundError') return false;
@@ -227,7 +204,6 @@ class VFS {
     }
   }
 
-  // Fichiers/dossiers protégés : suppression interdite sans { force: true }.
   static PROTECTED = ['system:kernel.js', 'system:version.json', 'config:update-sources.json', 'system:', 'root:index.html'];
 
   async remove(vpath, opts = {}) {
@@ -246,9 +222,6 @@ class VFS {
     if (window.USBosLog) window.USBosLog.warn('vfs', `supprimé ${vpath}`);
   }
 
-  /** Liste les entrées (nom + type) d'un "dossier virtuel".
-   * Ne retourne pas les tailles (FS API : exigerait un getFile() par entrée).
-   * Utiliser stat(vpath) pour la taille d'un fichier précis. */
   async list(vpath) {
     const dir = await this._resolveDir(vpath);
     const out = [];
@@ -262,11 +235,6 @@ class VFS {
     await this._resolveDir(vpath, true);
   }
 
-  /**
-   * Parcours récursif : retourne les vpaths de TOUS les fichiers sous
-   * `dirVpath` (ex. walk('data:') -> ['data:notes/notes.json', ...]).
-   * Plafonné (garde-fou DoS) et cycliquement sûr (pas de liens en FS API).
-   */
   async walk(dirVpath, maxFiles = 5000) {
     const out = [];
     const unreadable = [];
@@ -281,16 +249,13 @@ class VFS {
       try {
         entries = await this.list(cur);
       } catch (err) {
-        // Racine absente (ex. update:mig-backup sans migration) : cas normal,
-        // zéro fichier — retour silencieux, sans warn parasite au boot.
         if (rootCall && err && err.name === 'NotFoundError') return [];
-        // Sous-dossier disparu entre-temps : skip silencieux (debug seul).
         if (err && err.name === 'NotFoundError') {
           if (window.USBosLog) window.USBosLog.debug('vfs', `walk : sous-dossier disparu, ignoré : ${cur}`);
           continue;
         }
         unreadable.push(cur);
-        continue; // dossier illisible -> ignoré, pas d'échec global
+        continue;
       }
       for (const e of entries) {
         try { assertSafePart(e.name); } catch {
@@ -313,17 +278,11 @@ class VFS {
     return out;
   }
 
-  /** Déplace/renomme via staging (écrit tmp, relit, puis supprime la source).
-   * Non-atomique côté FS API, mais la source n'est supprimée qu'après écriture
-   * réussie ET relecture conforme (le contenu relu du staging est la preuve
-   * que l'écriture a bien atterri). */
   async moveFile(fromVpath, toVpath) {
     let buf;
     try {
       buf = await this.readBinary(fromVpath);
     } catch (err) {
-      // distinguer « absent » d'une erreur réelle : un NotFound masqué en
-      // "source manquante" faisait croire à une perte de données.
       if (err && err.name === 'NotFoundError') throw new VFSError(`Source not found: ${fromVpath}`, 'NOT_FOUND');
       throw err;
     }
@@ -341,9 +300,6 @@ class VFS {
     await this.remove(fromVpath);
   }
 
-  /** Vide un dossier tampon (.update) sans toucher aux autres arborescences.
-   * Par défaut ne crée PAS le dossier (create=false) : passer create:true
-   * explicitement quand la création est voulue (ex. updater, staging). */
   async clearDir(vpath, create = false) {
     const dir = await this._resolveDir(vpath, create);
     for await (const [name] of dir.entries()) {
@@ -352,9 +308,6 @@ class VFS {
   }
 }
 
-// Petites fonctions utilitaires exportées pour l'installeur (avant qu'un VFS existe).
-// NOTE : mode 'readwrite' exigé pour installer (sur-privilège assumé : l'install
-// écrit l'arborescence ; un mode 'read' seul ne suffirait pas ici).
 async function pickInstallParentDirectory() {
   if (typeof window.showDirectoryPicker !== 'function') {
     throw new VFSError('File System Access API unavailable in this browser.', 'UNSUPPORTED');
@@ -362,11 +315,6 @@ async function pickInstallParentDirectory() {
   return window.showDirectoryPicker({ mode: 'readwrite' });
 }
 
-/**
- * Un dossier est considéré comme une installation USBos valide s'il
- * contient déjà system/ et apps/ AVEC leurs marqueurs (version.json et
- * au moins un manifeste lisible côté apps/). Évite les faux positifs.
- */
 async function looksLikeUSBosRoot(handle) {
   try {
     const sys = await handle.getDirectoryHandle('system');
@@ -381,9 +329,6 @@ async function looksLikeUSBosRoot(handle) {
       return false;
     }
     if (!versionOk) return false;
-    // Au moins une app avec manifest.json, ou dossier apps vide mais
-    // system valide (première install partielle) : on accepte si le
-    // noyau est présent (kernel.js) pour ne pas rejeter une install neuve.
     try {
       await sys.getFileHandle('kernel.js');
     } catch {

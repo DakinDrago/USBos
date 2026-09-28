@@ -1,26 +1,7 @@
 /*
  * USBos — system/updater.js
- * Mise à jour automatique, "négative" (ne télécharge que ce qui a changé),
- * via GitHub raw (dépôts publics, séparés : un pour le kernel, un par app).
- * Sécurité : HTTPS exigé, chemins distants validés (anti traversal), hash
- * SHA-256 vérifié AVANT bascule, staging dans .update/staging puis bascule.
- * Limite connue : files.json/version.json ne sont pas signés — un dépôt
- * compromis peut fournir des hash assortis. Ne pas présenter le hash seul
- * comme preuve d'authenticité.
- *
- * Configuration attendue dans config/update-sources.json :
- * {
- *   "kernel": "https://raw.githubusercontent.com/<user>/usbos-kernel/main",
- *   "apps": {
- *     "notes": "https://raw.githubusercontent.com/<user>/usbos-app-notes/main",
- *     "mesh":  "https://raw.githubusercontent.com/<user>/usbos-app-mesh/main"
- *   }
- * }
- *
- * Chaque dépôt distant doit exposer à sa racine :
- *   version.json  -> { "version": "1.2.3" }
- *   files.json    -> { "files": { "kernel.js": "sha256hex", ... } }  (chemins relatifs à system/ ou apps/<id>/)
- *   ...les fichiers eux-mêmes.
+ * Delta updates over HTTPS (SHA-256 verified, staged).
+ * Note: files.json/version.json are hash-checked but not cryptographically signed.
  */
 'use strict';
 

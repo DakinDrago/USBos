@@ -1,4 +1,6 @@
-/* USBos app: notes — porté depuis le module original, adapté au contrat v2 (ctx.fs, mount/unmount). */
+/*
+ * USBos app: notes
+ */
 const STATE_FILE = 'notes.json';
 // Plafond d'export texte : le noyau refuse au-delà de 2 Mo par écriture
 // shared (pont RPC). Constant nommé pour que le message et le contrôle

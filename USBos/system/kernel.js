@@ -1,13 +1,10 @@
 /*
  * USBos — system/kernel.js
- * Noyau réduit : ne connaît RIEN du contenu métier des apps.
- * Responsabilités : boot, persistance du handle de la clé (IndexedDB),
- * verrouillage/passphrase, chargement des apps depuis apps/*, shell UI,
- * délégation des mises à jour à updater.js.
+ * Boot, shell UI, encryption orchestration, app loading, updates.
  */
 'use strict';
 
-const KERNEL_VERSION = '2.4.0.5';
+const KERNEL_VERSION = '2.4.0.6';
 const DB_NAME = 'usbos-kernel';
 const DB_STORE = 'handles';
 const DB_KEY = 'root';
@@ -26,10 +23,7 @@ const h = (tag, props, ...children) => {
   for (const c of children.flat()) { if (c == null) continue; n.append(c.nodeType ? c : document.createTextNode(c)); }
   return n;
 };
-
-// ---------------------------------------------------------------------
 // Persistance du handle racine (survit aux rechargements de page)
-// ---------------------------------------------------------------------
 const IDB = {
   async open() {
     return new Promise((res, rej) => {
@@ -67,10 +61,7 @@ const IDB = {
     });
   },
 };
-
-// ---------------------------------------------------------------------
 // État global du noyau
-// ---------------------------------------------------------------------
 const state = {
   vfs: null,
   usbosHandle: null,
@@ -101,12 +92,9 @@ const state = {
 };
 
 const LEVEL_MAP = { i: 'info', w: 'warn', e: 'error' };
-
-// ---------------------------------------------------------------------
 // Thèmes : jeux complets de variables (miroir de kernel.css — test de
 // cohérence dans t12). Injectés dans le srcdoc (les iframes ne voient pas
 // les variables du parent) via buildThemeCSS().
-// ---------------------------------------------------------------------
 const THEMES = {
   dark: {
     bg: '#0d1117', panel: '#161b22', panel2: '#1c2330', border: '#2b3442',
@@ -130,10 +118,7 @@ const ACCENTS = {
   orange: { dark: ['#e8820c', '#c25e04'], light: ['#c25e04', '#9a4a03'] },
 };
 const THEME_PATH = 'config:theme.json';
-
-// ---------------------------------------------------------------------
 // Couleurs : parsing/mélange pour la dérivation des thèmes custom.
-// ---------------------------------------------------------------------
 function hexToRgb(hex) {
   const m = /^#([0-9a-f]{6})$/i.exec(String(hex || '').trim());
   if (!m) return null;
@@ -362,12 +347,9 @@ function unwatchSystemTheme() {
   state.mq = null;
   state.mqHandler = null;
 }
-
-// ---------------------------------------------------------------------
 // Fonds d'écran : presets de dégradés (+ slides), shell + opt-in par app.
 // config:wallpaper.json est en clair -> lisible AVANT déverrouillage, le
 // verrou s'affiche donc déjà sur le fond choisi.
-// ---------------------------------------------------------------------
 const WALLPAPERS = {
   defaut: { dark: null, light: null },
   aurore: {
@@ -662,11 +644,8 @@ function startWallSlideshow() {
   if (!currentWallPrefs().slide) return;
   state.wallTimer = setInterval(stepWallpaper, currentWallPrefs().intervalSec * 1000);
 }
-
-// ---------------------------------------------------------------------
 // Mise en page : coins, taille, densité, disposition (config:ui.json).
 // Appliqué via dataset sur <html> (shell) + transmis à l'iframe.
-// ---------------------------------------------------------------------
 const UI_RADIUS = ['carre', 'doux', 'rond'];
 const UI_FS = ['s', 'm', 'l'];
 const UI_DENSITY = ['compact', 'confort'];
@@ -747,12 +726,9 @@ function log(msg, level = 'i') {
   // Plus de panneau intégré : le journal vit dans la console DevTools
   // (miroir temps réel) + bouton « Journal » (récapitulatif à la demande).
 }
-
-// ---------------------------------------------------------------------
 // i18n : dictionnaires JSON (system/lang/*.json + customs config:lang/),
 // t(path, params) avec repli lang -> en -> fr -> clé, pluriels via
 // Intl.PluralRules, dates via Intl + locale active. Les logs restent en FR.
-// ---------------------------------------------------------------------
 const LANG_BUILTIN = ['fr', 'en'];
 const LANG_DIR = 'system:lang';
 const LANG_CUSTOM_DIR = 'config:lang';
@@ -1019,10 +995,7 @@ async function setLang(lang) {
   }
   refreshChromeLabels();
 }
-
-// ---------------------------------------------------------------------
 // Boot
-// ---------------------------------------------------------------------
 async function boot() {
   renderShellSkeleton();
 
@@ -1344,12 +1317,9 @@ async function connectFlow() {
     else log(`Connexion annulée ou refusée : ${err.message}`, 'e');
   }
 }
-
-// ---------------------------------------------------------------------
 // Passphrase maître — chiffre TOUTES les données d'apps par défaut
 // (pas seulement le Coffre). Clé dérivée en mémoire uniquement, jamais
 // écrite sur disque ni dans IndexedDB.
-// ---------------------------------------------------------------------
 const MASTER_SALT_PATH = 'config:master.salt';
 const MASTER_CHECK_PATH = 'config:master.check';
 const MASTER_CHECK_PLAINTEXT = 'USBOS-MASTER-OK';
@@ -2277,10 +2247,7 @@ async function closeActiveApp() {
   const st = $('stage');
   if (st) st.classList.remove('app-open');
 }
-
-// ---------------------------------------------------------------------
 // Mises à jour (délégué à updater.js)
-// ---------------------------------------------------------------------
 async function checkForUpdates() {
   if (!window.USBosUpdater || !state.vfs || state.guest) return null;
   try {
@@ -2373,10 +2340,7 @@ function stopUpdateChecker() {
   if (state.updateTimer) { clearInterval(state.updateTimer); state.updateTimer = null; }
   state.updateCheckRunning = false;
 }
-
-// ---------------------------------------------------------------------
 // UI — shell minimal (topbar, sidebar liste d'apps, stage)
-// ---------------------------------------------------------------------
 function renderShellSkeleton() {
   document.body.innerHTML = '';
   try { document.documentElement.lang = bootLang(); } catch { /* noop */ }
@@ -2546,11 +2510,8 @@ function showEmptyStage() {
   highlightActivePage('dashboard');
   renderDashboard(stage);
 }
-
-// ---------------------------------------------------------------------
 // Pages (vues du noyau : usage & expérience) VS Apps (iframes sandboxées
 // : fonctionnel). Registre extensible : toute customisation vit ici.
-// ---------------------------------------------------------------------
 function accentPair(name) {
   const mode = resolveThemeName();
   const pair = (ACCENTS[name] || ACCENTS.blue)[mode];
@@ -3662,12 +3623,9 @@ function highlightActivePage(id) {
     document.querySelectorAll('.mitem').forEach((el) => el.classList.remove('active'));
   }
 }
-
-// ---------------------------------------------------------------------
 // Tableau de bord (menu démarrer) : lecture seule, chaque carte échoue
 // indépendamment. Les données data: sont lues déchiffrées via la clé
 // maître de session (même privilège que usbos.fs.cat) — rien n'est écrit.
-// ---------------------------------------------------------------------
 function dashGreeting(date = new Date()) {
   const h = date.getHours();
   if (h < 18) return h < 12 ? t('shell.greet.morning') : t('shell.greet.afternoon');
@@ -4000,8 +3958,6 @@ window.USBosKernel = {
     return new TextDecoder().decode(buf);
   },
 };
-
-// ---------------------------------------------------------------------
 let _booted = false;
 function bootOnce() { if (_booted) return; _booted = true; boot(); }
 window.addEventListener('DOMContentLoaded', bootOnce);

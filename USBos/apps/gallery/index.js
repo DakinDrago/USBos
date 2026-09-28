@@ -1,17 +1,5 @@
 /*
- * USBos app: gallery — visionneuse multimédia de la clé.
- * Lit les images / vidéos / audios depuis Partage/ (commun), vos fichiers
- * locaux (sélecteur, lecture directe sans copie) et vos médias importés
- * (data:gallery). Comprend le conteneur .upack v1 (vérifié morceau par
- * morceau, extraction ou lecture directe du média intérieur).
- *
- * Plafonds — deux ceilings DIFFÉRENTS, à ne plus confondre :
- * - DATA_MAX_BYTES 64 Mo : écrire dans data:gallery/ passe par le chiffrement
- *   du noyau, qui refuse au-delà de 64 Mo par fichier. C'est la VRAI limite
- *   d'un média importé (l'ancien 256 MoIci mentait : l'import échouait au
- *   dernier moment, sans message, après avoir chargé le fichier en RAM).
- * - SHARED_MAX_BYTES 256 Mo : Partage/ est en clair, d'où la limite du pont.
- * - UPACK_BUILD_MAX 64 Mo : taille d'un .upack construit.
+ * USBos app: gallery
  */
 const DATA_MAX_BYTES = 64 * 1024 * 1024;
 const SHARED_MAX_BYTES = 256 * 1024 * 1024;

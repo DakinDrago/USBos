@@ -1,24 +1,14 @@
 /*
  * USBos — system/crypto.js
- * Primitives de chiffrement du noyau : dérivation de clé (PBKDF2) et
- * chiffrement authentifié (AES-GCM). Utilisé pour chiffrer TOUTES les
- * données d'apps par défaut (pas seulement le Coffre), via une passphrase
- * de session saisie une fois au déverrouillage.
+ * PBKDF2 key derivation + AES-GCM encryption for app data.
  */
 'use strict';
 
-// NOTE compat : 210000 itérations historiques. Un bump (ex. 600k, reco OWASP)
-// changerait TOUTES les clés dérivées et verrouillerait les clés chiffrées
-// existantes hors de leurs données. Ne monter qu'avec une enveloppe KDF
-// versionnée + migration de ré-encryption (non implémentée v1).
+// 210000 iterations (historical). Bumping requires versioned KDF + re-encryption migration.
 const PBKDF2_ITERATIONS = 210000;
 const MAX_PLAINTEXT_BYTES = 64 * 1024 * 1024;
-// En-tête worst-case : magic(3) + IV(12) + tag GCM(16). Le déchiffré est
-// borné comme le clair, sinon un fichier arbitrairement gros charged en RAM
-// (ou une v2 tronquée dont le magic a disparu) part en AES-GCM sans limite.
-const MAX_CIPHERTEXT_BYTES = MAX_PLAINTEXT_BYTES + 3 + 12 + 16;
+const MAX_CIPHERTEXT_BYTES = MAX_PLAINTEXT_BYTES + 3 + 12 + 16; // magic + IV + GCM tag
 
-/** Erreur typée : le code est stable (indépendant de la langue) unlike le message. */
 function cryptoError(code, message) {
   const e = new Error(message);
   e.code = code;
@@ -39,8 +29,7 @@ function normalizeAad(aad) {
 }
 
 async function deriveMasterKey(passphrase, saltBytes) {
-  // NOTE : pas de normalize('NFKC') ici — toute normalisation modifierait les
-  // clés dérivées et verrouillerait les passphrases non-ASCII existantes.
+  // No NFKC normalize — would change existing non-ASCII passphrase keys.
   const raw = String(passphrase);
   if (raw.length > 512) throw new Error('Passphrase trop longue (max 512 caractères).');
   if (!raw || raw.length < 8) throw new Error('Passphrase trop courte (min 8 caractères).');
@@ -54,8 +43,7 @@ async function deriveMasterKey(passphrase, saltBytes) {
   );
 }
 
-// Format v2 : MAGIC 'U1' (0x55 0x31) + ver 0x01 + IV 12 octets + ciphertext AES-GCM.
-// Lecture compatible v1 legacy (IV 12 || ct sans magic).
+// Format v2: MAGIC 'U1' + ver 0x01 + IV(12) + ciphertext. Legacy v1: IV(12) + ciphertext.
 async function encryptBuffer(key, arrayBuffer, aad) {
   if (!key) throw new Error('Clé manquante.');
   let data;

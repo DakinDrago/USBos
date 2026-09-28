@@ -1,11 +1,5 @@
 /*
  * USBos — system/console.js
- * Construit window.usbos : l'API de commandes utilisable depuis la console
- * DevTools. Appelle DIRECTEMENT les fonctions internes du noyau (même
- * scope, même processus) — pas de pont RPC ici, contrairement aux apps.
- * N'importe qui ouvrant DevTools a de toute façon déjà accès à `state`,
- * `openApp`, etc. : cette API organise et documente cet accès, elle ne
- * retire ni n'ajoute de barrière de sécurité.
  */
 'use strict';
 
@@ -70,7 +64,6 @@ function guarded(fn) {
   };
 }
 
-// ------------------------------------------------------------------ system
 defineCommand('system', 'info', {
   help: 'console.system.info',
   run: () => ({
@@ -109,7 +102,6 @@ defineCommand('system', 'lang', {
   },
 });
 
-// -------------------------------------------------------------------- logs
 defineCommand('logs', 'tail', {
   help: 'console.logs.tail',
   run: (n = 50) => window.USBosLog.tail(n),
@@ -138,7 +130,6 @@ defineCommand('logs', 'export', {
   },
 });
 
-// -------------------------------------------------------------------- apps
 defineCommand('apps', 'list', {
   help: 'console.apps.list',
   run: () => [...K().state.apps.values()].map((a) => a.manifest),
@@ -170,7 +161,6 @@ defineCommand('apps', 'manifest', {
   },
 });
 
-// ---------------------------------------------------------------------- fs
 defineCommand('fs', 'ls', {
   help: 'console.fs.ls',
   run: (vpath) => { requireConnected(); return K().state.vfs.list(vpath); },
@@ -219,7 +209,6 @@ defineCommand('fs', 'write', {
   }),
 });
 
-// --------------------------------------------------------------- updater
 defineCommand('updater', 'check', {
   help: 'console.updater.check',
   run: () => K().checkForUpdates(),
@@ -235,7 +224,6 @@ defineCommand('updater', 'apply', {
   }),
 });
 
-// -------------------------------------------------------------- security
 defineCommand('security', 'status', {
   help: 'console.security.status',
   run: () => ({
@@ -276,13 +264,11 @@ defineCommand('security', 'changePassphrase', {
   }),
 });
 
-// ------------------------------------------------------------------- mesh
 defineCommand('mesh', 'note', {
   help: 'console.mesh.note',
   run: () => ct('console.mesh.open'),
 });
 
-// --------------------------------------------------------------------- dev
 defineCommand('dev', 'dumpState', {
   help: 'console.dev.dumpState',
   run: () => ({
@@ -297,7 +283,6 @@ defineCommand('dev', 'dumpState', {
 });
 defineCommand('dev', 'version', { help: 'console.dev.version', run: () => K().version });
 
-// ------------------------------------------------------------------- help
 function buildHelp(category) {
   const cats = category ? [category] : Object.keys(REGISTRY);
   const lines = [];
@@ -314,7 +299,6 @@ function buildHelp(category) {
   return lines.join('\n');
 }
 
-// --------------------------------------------------------- construction
 function safeArg(a) {
   try {
     const s = JSON.stringify(a);
@@ -354,7 +338,6 @@ for (const [cat, commands] of Object.entries(REGISTRY)) {
 }
 window.usbos = usbos;
 
-// ------------------------------------------------- formes courtes `u.*`
 // `u` = même API en plus court : miroirs de catégories (u.logs.tail(100))
 // + getters LECTURE SEULE sans parenthèses (u.info, u.tail...). Aucun
 // getter sur ce qui modifie (clear/lock/rm/apply...) : un simple survol
@@ -397,7 +380,6 @@ window.u = u;
 window.$help = (category) => usbos.help(category);
 window.USBosLog.info('console', 'Console de commandes prête — tapez usbos.help(), u.help ou $help() dans DevTools.');
 
-// ------------------------------------------------- palette de commandes
 // Overlay façon IDE (bouton ⌘ / Ctrl+K) : fantôme gris + TAB + ↑↓ + historique.
 // Indexe REGISTRY + alias courts. Exécution via les mêmes cmd.run (mêmes
 // gardes) ; les destructives demandent une confirmation inline (2e Entrée).

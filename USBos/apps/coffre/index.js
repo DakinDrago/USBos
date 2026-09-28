@@ -1,9 +1,5 @@
 /*
- * USBos app: coffre — gestionnaire d'identifiants.
- * Le chiffrement (AES-GCM via WebCrypto, clé dérivée PBKDF2 d'une passphrase
- * saisie dans l'app) est entièrement géré ici : le kernel ne connaît jamais
- * la passphrase ni les données en clair. Le fichier binaire est stocké via
- * ctx.fs.writeBinary — illisible sans la passphrase.
+ * USBos app: coffre
  */
 const VAULT_FILE = 'coffre.bin';
 const SALT_FILE = 'coffre.salt';

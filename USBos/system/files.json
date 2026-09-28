@@ -1,15 +1,15 @@
 {
   "files": {
-    "console.js": "80080eda5d41a722495e2e7085aaa6a022a739f720cf398f96ca66c5bd994d8d",
-    "crypto.js": "29ed5e35c12fd9b86711a04065967e916914b7f7af6df2fdf518dc800cbf2c09",
+    "console.js": "02bb45742ad67c2ce64cc9f6d88aa6bbb8393b68011db7f917af6e26497c5436",
+    "crypto.js": "8c189867a7d556f9318768ec0ede5150a74af6e64bdbf9c4dac68e2bebcc690e",
     "kernel.css": "8dfc7ef8d80b587755c957e603d09ff5cff1b523c788412cc5a937a4e3fe4e77",
-    "kernel.js": "a8159848152a2c26101627cab130fc40ec3e8baa357e341e74119c26a852031a",
+    "kernel.js": "cce1a96da53c2e5d77d7a6b15f433ec8803d0b54dbf91d6667f43277703be857",
     "lang/en.json": "0aad57f2b22857d15af1e038124f589fa906c3b162c2c18e2d6df1a5c2926730",
     "lang/fr.json": "7f5ee3e65f5d3b3e0f69280fa0f7e52078ae2b2df207344f6184424960da7066",
-    "logbus.js": "8272b56020317baa8d7a52eb769405b496b7062f211968a7b6c1ad37d3e41617",
-    "upack.js": "d737c1e543ee764a5b4a4b7f0ca832058a756d0db7b22bc9ed27f7be1170b783",
-    "updater.js": "843afc528836e77464ec725b5945dd345b06e67cffe03933427376bf1073eeef",
-    "vfs.js": "31ff0ed6688db59dadf621313ac9c30bae5db1b69cc4972cad52a2b6f7021bb0"
+    "logbus.js": "454b5c9b5b1d7771cfb99ea01327d9bd55bf998fbe2aff9312217f79e5a3b628",
+    "upack.js": "d2a3b12333e1df6a9f045a11c254ba4ca0f28cfa7ce124d439e5492b544d473c",
+    "updater.js": "e012681ed8926c0d3b4a2b077d65631838ac423dfb8053cbb1591beed227d8d9",
+    "vfs.js": "5167ff3f04ebbec638d93dd529f5f691dc8a59b2c6dfc7e64f0baf1584efd978"
   },
-  "version": "2.4.0.5"
+  "version": "2.4.0.6"
 }

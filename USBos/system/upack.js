@@ -1,10 +1,5 @@
-/* USBos — conteneur .upack v1 (miroir de tools/upack.py).
- * Fichier unique : magic 'USBOS1' + longueur en-tête uint32 BE + en-tête
- * JSON {v,name,mime,size,chunk,hashes,sha} + morceaux concaténés.
- * Pur (aucun DOM) : utilisable dans le noyau, en vendor/ des apps
- * (mesh, gallery) et sous Node pour les tests (tools/test-upack.cjs).
- * Les erreurs sont techniques ('upack: ...') : l'appelant les mappe vers
- * ses propres chaînes i18n.
+/*
+ * USBos — system/upack.js
  */
 (function (root) {
   'use strict';

@@ -1,8 +1,5 @@
-/* USBos app: agenda — vrai calendrier (vues Mois/Semaine/Jour) avec
- * import/export iCalendar (.ics, RFC 5545), compatible Google/Outlook/Apple.
- * Fuseau horaire détecté automatiquement (Intl), conversions via UTC.
- * Schéma data v2 : { version: 2, events: [...] }. Les données v1 (semaine
- * type + échéances) sont migrées automatiquement au premier chargement.
+/*
+ * USBos app: agenda
  */
 const STATE_FILE = 'agenda.json';
 const MAX_EVENTS = 5000;
@@ -138,12 +135,9 @@ function dowShort(locale, i) {
   } catch { return ''; }
 }
 function isValidTime(s) { return /^([01]\d|2[0-3]):[0-5]\d$/.test(s || ''); }
-
-// ---------------------------------------------------------------------------
 // Fuseau horaire : détection automatique, conversions heure locale <-> UTC.
 // Les événements sont stockés en heure locale (date + HH:MM) ; l'export ICS
 // convertit vers UTC (suffixe Z), l'import reconvertit vers le fuseau local.
-// ---------------------------------------------------------------------------
 function detectTZ() {
   try {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -187,10 +181,7 @@ function utcToWall(date, tz) {
 function toICSStamp(date) {
   return `${date.getUTCFullYear()}${pad2(date.getUTCMonth() + 1)}${pad2(date.getUTCDate())}T${pad2(date.getUTCHours())}${pad2(date.getUTCMinutes())}${pad2(date.getUTCSeconds())}Z`;
 }
-
-// ---------------------------------------------------------------------------
 // iCalendar (RFC 5545) — fonctions pures.
-// ---------------------------------------------------------------------------
 function icsEscape(s) {
   return String(s ?? '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\r\n|\r|\n/g, '\\n');
 }
@@ -323,10 +314,7 @@ function icsImport(text, tz, t) {
   }
   return { events: events.slice(0, MAX_EVENTS), skipped, simplified };
 }
-
-// ---------------------------------------------------------------------------
 // Migration v1 (semaine type + échéances) -> v2 (événements datés).
-// ---------------------------------------------------------------------------
 function migrateV1(data, t) {
   const events = [];
   const weekStart = mondayOf(todayISO()); // semaine courante à venir
