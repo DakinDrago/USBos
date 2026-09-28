@@ -3,7 +3,7 @@
     "console.js": "02bb45742ad67c2ce64cc9f6d88aa6bbb8393b68011db7f917af6e26497c5436",
     "crypto.js": "8c189867a7d556f9318768ec0ede5150a74af6e64bdbf9c4dac68e2bebcc690e",
     "kernel.css": "8dfc7ef8d80b587755c957e603d09ff5cff1b523c788412cc5a937a4e3fe4e77",
-    "kernel.js": "cce1a96da53c2e5d77d7a6b15f433ec8803d0b54dbf91d6667f43277703be857",
+    "kernel.js": "04d7fe16766f03f3e72bd5770c422ebdb56b2a77be1c643602947e891df0e29b",
     "lang/en.json": "0aad57f2b22857d15af1e038124f589fa906c3b162c2c18e2d6df1a5c2926730",
     "lang/fr.json": "7f5ee3e65f5d3b3e0f69280fa0f7e52078ae2b2df207344f6184424960da7066",
     "logbus.js": "454b5c9b5b1d7771cfb99ea01327d9bd55bf998fbe2aff9312217f79e5a3b628",
@@ -11,5 +11,5 @@
     "updater.js": "e012681ed8926c0d3b4a2b077d65631838ac423dfb8053cbb1591beed227d8d9",
     "vfs.js": "5167ff3f04ebbec638d93dd529f5f691dc8a59b2c6dfc7e64f0baf1584efd978"
   },
-  "version": "2.4.0.6"
+  "version": "2.4.0.7"
 }

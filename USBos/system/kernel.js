@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const KERNEL_VERSION = '2.4.0.6';
+const KERNEL_VERSION = '2.4.0.7';
 const DB_NAME = 'usbos-kernel';
 const DB_STORE = 'handles';
 const DB_KEY = 'root';
@@ -2062,7 +2062,19 @@ html[data-fs="s"] body{zoom:.92}html[data-fs="l"] body{zoom:1.1}
     const p = pending.get(data.id);
     if (!p) return;
     pending.delete(data.id);
-    if (data.error) p.reject(new Error(data.error)); else p.resolve(data.result);
+    if (data.error) {
+      // Le RPC ne conserve que err.message par structured clone : on
+      // propage aussi name/code pour que les apps distinguent NotFoundError
+      // (premier lancement) d'une vraie panne E/S. Compat string legacy.
+      const raw = data.error;
+      const msg = raw && typeof raw === 'object' ? (raw.message || 'RPC error') : String(raw);
+      const e = new Error(msg);
+      if (raw && typeof raw === 'object') {
+        if (typeof raw.name === 'string' && raw.name) e.name = raw.name;
+        if (typeof raw.code === 'string' && raw.code) e.code = raw.code;
+      }
+      p.reject(e);
+    } else p.resolve(data.result);
   });
   const ctx = {
     appId: APP_ID,
@@ -2176,7 +2188,13 @@ function installRPCListenerOnce() {
       const result = await handleAppRPC(realId, data.method, data.args);
       state.activeFrame.contentWindow.postMessage({ __usbosReply: true, id: data.id, result }, '*');
     } catch (err) {
-      state.activeFrame.contentWindow.postMessage({ __usbosReply: true, id: data.id, error: err.message }, '*');
+      // Préserve name/code à travers postMessage (sinon les apps voient un
+      // Error générique et traitent un premier lancement NotFound comme une
+      // panne bloquante). message seul ne suffit pas.
+      const detail = err && typeof err === 'object'
+        ? { message: String(err.message || err), name: String((err.name || 'Error')), code: typeof err.code === 'string' ? err.code : undefined }
+        : { message: String(err), name: 'Error' };
+      state.activeFrame.contentWindow.postMessage({ __usbosReply: true, id: data.id, error: detail }, '*');
     }
   });
 }
