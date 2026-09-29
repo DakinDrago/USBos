@@ -20,6 +20,8 @@
   "importBtn": "Import",
   "importFailed": "Import failed: {error}",
   "imported": "Imported: {name}",
+  "loadFailed": "Could not load: {error}",
+  "maxSize": "data too large (max {max} MB)",
   "new": "New",
   "noResult": "No results.",
   "noname": "(unnamed)",
@@ -34,5 +36,6 @@
   "searchAria": "Search documents",
   "searchPh": "Search… ( / )",
   "sharedNone": "No .md in Shared/.",
-  "titlePh": "Document name…"
+  "titlePh": "Document name…",
+  "truncated": "Document truncated to {max} characters."
 }

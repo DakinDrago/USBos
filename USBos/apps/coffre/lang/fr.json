@@ -1,6 +1,9 @@
 {
   "add": "Ajouter",
   "badPass": "Passphrase incorrecte ou coffre corrompu.",
+  "copied": "Copié ✓",
+  "copy": "Copier",
+  "copyFailed": "Échec de la copie",
   "create": "Créer le coffre",
   "delete": "Suppr.",
   "deleted": "Identifiant supprimé",
@@ -31,5 +34,6 @@
   "sure": "Sûr ?",
   "title": "Coffre",
   "tooBig": "Fichier trop gros (>25 Mo)",
-  "unlock": "Déverrouiller"
+  "unlock": "Déverrouiller",
+  "unlockUnavailable": "Écran de déverrouillage indisponible. Recharge l'app."
 }

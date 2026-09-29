@@ -24,6 +24,7 @@
   "optSymbols": "symbols",
   "optUpper": "UPPERCASE",
   "shaBtn": "Compute SHA-256",
+  "shaError": "SHA computation failed: {error}",
   "shaLabel": "SHA-256 fingerprint",
   "shaPh": "Text to hash…",
   "tabB64": "Base64",

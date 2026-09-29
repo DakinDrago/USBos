@@ -74,6 +74,10 @@ Next to `USBos/`, the installer creates a **`Shared/`** folder (shown in French 
 | 🗒️ **Notes** | Quick notes with title and content, built-in search |
 | 🧰 **Toolbox** | Small utilities (copy, conversions…) |
 
+## Installing a third-party app (`.uapp`)
+
+Beyond the 7 built-in apps, USBos can install a third-party app from a **`.uapp`** file — a plain ZIP, renamed, that any compression tool on any OS can produce from an app folder. From **Settings → System → Install an app**, pick the file: a dialog shows the id, version, file count, SHA-256 fingerprint, and exactly which permissions/network access it's asking for — nothing is written to your drive until you confirm. Nothing is signed or vetted by anyone either: only install what you built yourself or got from a source you trust.
+
 ## Security and privacy — what to know
 
 - Your apps' content (`data/`) is encrypted with **AES-GCM** (key derived from your passphrase via PBKDF2, 210,000 iterations) — a robust, well-established standard.
@@ -113,6 +117,7 @@ USBos/
 │   │   ├── kernel.js                 # boot, shell UI, encryption, RPC bridge
 │   │   ├── kernel.css
 │   │   ├── vfs.js                    # virtual file system
+│   │   ├── uapp.js                   # .uapp package reader/validator (third-party apps)
 │   │   ├── crypto.js                 # PBKDF2 + AES-GCM
 │   │   ├── logbus.js                 # in-memory log (dmesg-like)
 │   │   ├── console.js                # window.usbos / u API + command palette
@@ -164,7 +169,9 @@ USBos/
     ├── validate-lang.py
     ├── gen_files_json.py
     ├── upack.py
+    ├── uapp.py
     ├── test-lang.cjs
+    ├── test-uapp.cjs
     └── test-upack.cjs
 ```
 
@@ -213,8 +220,10 @@ This automatically regenerates, for the kernel **and** every app (no need to say
 python tools/validate-versions.py      # version consistency across the whole repo
 python tools/validate-lang.py          # FR/EN dictionary symmetry
 node tools/test-lang.cjs               # runtime tests on translations
+node tools/test-uapp.cjs               # tests for the .uapp reader (built packages, hostile ones too)
 python tools/release.py                # the one command: syncs everything and rebuilds installer.html
 python tools/upack.py pack|verify|unpack ...   # .upack container (export/import)
+python tools/uapp.py pack|verify|unpack ...    # .uapp package (third-party apps, renamed ZIP)
 python skills/usbos-app/validate.py USBos/apps/<id>/   # validate a new app
 ```
 

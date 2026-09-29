@@ -1,6 +1,9 @@
 {
   "add": "Add",
   "badPass": "Incorrect passphrase or corrupt vault.",
+  "copied": "Copied ✓",
+  "copy": "Copy",
+  "copyFailed": "Copy failed",
   "create": "Create vault",
   "delete": "Del.",
   "deleted": "Credential deleted",
@@ -31,5 +34,6 @@
   "sure": "Sure?",
   "title": "Vault",
   "tooBig": "File too large (>25 MB)",
-  "unlock": "Unlock"
+  "unlock": "Unlock",
+  "unlockUnavailable": "Unlock screen unavailable. Reload the app."
 }

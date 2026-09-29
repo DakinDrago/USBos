@@ -160,6 +160,14 @@ defineCommand('apps', 'manifest', {
     return entry.manifest;
   },
 });
+defineCommand('apps', 'install', {
+  help: 'console.apps.install',
+  run: async (vpath) => {
+    requireConnected();
+    const bytes = await K().state.vfs.readBinary(String(vpath));
+    return K().installUappBytes(new Uint8Array(bytes));
+  },
+});
 
 defineCommand('fs', 'ls', {
   help: 'console.fs.ls',

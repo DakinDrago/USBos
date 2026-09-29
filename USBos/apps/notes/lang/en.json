@@ -18,7 +18,13 @@
   "hint": "Each save really writes to the key (data/notes/notes.json). Export to Shared/ = readable outside USBos.",
   "importBtn": "Import",
   "importFailed": "Import failed: {error}",
+  "importSkipped": {
+    "one": "{n} note skipped (quota)",
+    "other": "{n} notes skipped (quota)"
+  },
   "imported": "Imported: {name} ({n} note(s))",
+  "loadFailed": "Could not load: {error}",
+  "maxSize": "data too large (max {max} MB)",
   "noResult": "No results.",
   "nothingToExport": "Nothing to export.",
   "open": "Open",

@@ -7,6 +7,7 @@
   "connect": "Se connecter",
   "copyCode": "Copier",
   "disconnect": "Déconnecter",
+  "disposed": "Mesh a été fermé.",
   "download": "Télécharger",
   "dropHint": "Déposez un fichier ici (jusqu'à 256 Mo en morcelé) ou choisissez-le ci-dessous",
   "fileBigShared": "Fichier trop gros, utilisez Partage/ (>8 Mo)",
@@ -58,6 +59,7 @@
   "peerArrowMe": "{from} → moi",
   "peerInit": "PeerJS n'a pas pu être initialisé.",
   "refuse": "Refuser",
+  "saveFailed": "Configuration non enregistrée.",
   "scopeAll": "Tous les connectés",
   "scopeLabel": "Destinataires",
   "selfDial": "C'est ton propre code.",
@@ -67,5 +69,6 @@
   "statusOffline": "Non connecté au réseau de signalisation",
   "statusOnline": "En ligne — visible sous {id}",
   "title": "Mesh",
+  "tooManyTargets": "Trop de destinataires ({n}) : maximum {max}.",
   "unitKo": "Ko"
 }

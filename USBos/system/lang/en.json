@@ -2,6 +2,7 @@
   "console": {
     "apps": {
       "close": "Close the active app, back to home.",
+      "install": "usbos.apps.install(vpath) — reads a .uapp from any readable VFS path (e.g. 'shared:app.uapp') and runs the normal flow (validation, on-screen consent, revertible write).",
       "list": "List installed apps with their manifest.",
       "manifest": "usbos.apps.manifest(id) — show the full manifest.",
       "open": "usbos.apps.open(id) — open an app (like a click in the sidebar).",
@@ -85,6 +86,47 @@
     }
   },
   "shell": {
+    "apps": {
+      "badPackage": "Invalid package: {error}",
+      "builtinReserved": "“{id}” is a reserved id (built-in app, or already managed by updates) — a .uapp package can't replace it.",
+      "busy": "An install is already in progress.",
+      "consent": {
+        "access": "What this app will be able to do",
+        "accessData": "Read/write its own data, encrypted like everything else (data:).",
+        "accessShared": "Read/write the Shared folder (unencrypted, common to every app).",
+        "cancel": "Cancel",
+        "downgrade": "Warning: the package's version is OLDER than the one installed.",
+        "files": "Contents",
+        "filesValue": "{n} file(s), {size}",
+        "hash": "Fingerprint",
+        "hashHint": "SHA-256 of the whole package — note it down if you ever need to verify where it came from.",
+        "id": "ID",
+        "install": "Install",
+        "netHosts": "Connect to the network, only to: {hosts}.",
+        "netNone": "No network access.",
+        "replace": "Replace",
+        "replaceCheck": "I understand the existing app's code will be replaced.",
+        "replaceWarn": "An app named “{name}” already exists (version {from}). Replacing it overwrites its code — its data (under data:) is kept.",
+        "sbDownloads": "Trigger downloads.",
+        "sbForms": "Use forms.",
+        "sbModals": "Open modal dialogs.",
+        "sbPopups": "Open windows/tabs.",
+        "titleInstall": "Install {name}?",
+        "titleReplace": "Replace {name}?",
+        "version": "Version",
+        "warn": "USBos does not sign or verify where .uapp packages come from: only install ones you built yourself or got from a source you trust."
+      },
+      "guestBlocked": "Installing an app isn't allowed in guest mode.",
+      "installFailed": "Install failed: {error}",
+      "installed": "{name} {version} installed.",
+      "pickAria": "Choose a .uapp file",
+      "tooLarge": "Package too large (max {max} MB).",
+      "unavailable": "The .uapp package reader is unavailable (system/uapp.js missing).",
+      "unitB": "{n} B",
+      "unitKB": "{n} KB",
+      "unitMB": "{n} MB",
+      "updated": "{name} updated: {from} → {to}."
+    },
     "boot": {
       "incompleteBody": "A system file is missing (vfs/crypto/logbus/updater). Reinstall USBos via installer.html without touching data/.",
       "incompleteTitle": "Incomplete installation"
@@ -308,6 +350,9 @@
       "accentOrange": "Orange",
       "accentTitle": "Accent",
       "accentViolet": "Violet",
+      "appInstall": "Install an app",
+      "appInstallBtn": "Choose a .uapp file…",
+      "appInstallDetail": "From a .uapp package (renamed ZIP) — validated, then confirmed before anything is written.",
       "appearance": "Appearance",
       "appsOptIn": "Wallpaper visible in apps",
       "appsOptInDetail": "Per-app opt-in (solid background otherwise).",

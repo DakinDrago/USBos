@@ -7,6 +7,7 @@
   "connect": "Connect",
   "copyCode": "Copy",
   "disconnect": "Disconnect",
+  "disposed": "Mesh was closed.",
   "download": "Download",
   "dropHint": "Drop a file here (up to 256 MB chunked) or pick it below",
   "fileBigShared": "File too large, use Shared/ (>8 MB)",
@@ -58,6 +59,7 @@
   "peerArrowMe": "{from} → me",
   "peerInit": "PeerJS could not be initialized.",
   "refuse": "Decline",
+  "saveFailed": "Settings could not be saved.",
   "scopeAll": "Everyone connected",
   "scopeLabel": "Recipients",
   "selfDial": "That's your own code.",
@@ -67,5 +69,6 @@
   "statusOffline": "Not connected to the signaling network",
   "statusOnline": "Online — visible as {id}",
   "title": "Mesh",
+  "tooManyTargets": "Too many recipients ({n}): maximum {max}.",
   "unitKo": "KB"
 }

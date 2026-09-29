@@ -24,6 +24,7 @@
   "optSymbols": "symboles",
   "optUpper": "MAJUSCULES",
   "shaBtn": "Calculer SHA-256",
+  "shaError": "Calcul SHA impossible : {error}",
   "shaLabel": "Empreinte SHA-256",
   "shaPh": "Texte à hacher…",
   "tabB64": "Base64",

@@ -18,7 +18,13 @@
   "hint": "Chaque sauvegarde écrit réellement sur la clé (data/notes/notes.json). Export vers Partage/ = lisible hors USBos.",
   "importBtn": "Importer",
   "importFailed": "Échec d’import : {error}",
+  "importSkipped": {
+    "one": "{n} note ignorée (quota)",
+    "other": "{n} notes ignorées (quota)"
+  },
   "imported": "Importé : {name} ({n} note(s))",
+  "loadFailed": "Chargement impossible : {error}",
+  "maxSize": "données trop volumineuses (max {max} Mo)",
   "noResult": "Aucun résultat.",
   "nothingToExport": "Rien à exporter.",
   "open": "Ouvrir",

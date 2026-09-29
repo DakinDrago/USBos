@@ -4,7 +4,7 @@
  */
 'use strict';
 
-const KERNEL_VERSION = '2.4.0.7';
+const KERNEL_VERSION = '2.4.0.8';
 const DB_NAME = 'usbos-kernel';
 const DB_STORE = 'handles';
 const DB_KEY = 'root';
@@ -1509,6 +1509,219 @@ async function loadInstalledApps() {
   log(`${state.apps.size} app(s) détectée(s)`);
 }
 
+// ---------------------------------------------------------------------
+// Installation d'une app tierce depuis un paquet .uapp (ZIP renommé)
+// ---------------------------------------------------------------------
+// Le paquet est NON FIABLE : system/uapp.js valide tout (chemins, tailles, CRC,
+// manifeste, CSP) avant que la moindre écriture n'ait lieu ; l'utilisateur
+// donne ensuite un consentement explicite ; l'écriture est annulable (retour
+// arrière) si elle échoue en cours de route.
+
+// Apps officielles : JAMAIS remplaçables par un paquet — leur identifiant donne
+// accès à leurs données (ex. le Coffre). Liste en dur EN PLUS de la règle
+// « id géré par config:update-sources.json », au cas où cette source serait
+// retirée de la config. À compléter si une app officielle est ajoutée.
+const BUILTIN_APP_IDS = new Set(['agenda', 'coffre', 'gallery', 'markdown', 'mesh', 'notes', 'toolbox']);
+let uappBusy = false;
+
+function fmtBytes(n) {
+  if (n < 1024) return t('shell.apps.unitB', { n });
+  if (n < 1024 * 1024) return t('shell.apps.unitKB', { n: Math.round(n / 1024) });
+  return t('shell.apps.unitMB', { n: (n / 1048576).toFixed(1) });
+}
+
+function verCmp(a, b) {
+  const pa = String(a).split('-')[0].split('.').map(Number);
+  const pb = String(b).split('-')[0].split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || 0;
+    const y = pb[i] || 0;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+/** Boîte de consentement (tout le texte affiché vient du manifeste : uniquement via nœuds texte). */
+function showInstallConsent({ pkg, existing }) {
+  return new Promise((resolve) => {
+    const m = pkg.manifest;
+    const prevFocus = document.activeElement;
+    const replacing = !!existing;
+    const oldVer = replacing ? String((existing.manifest && existing.manifest.version) || '?') : '';
+    const displayName = `${m.icon ? m.icon + ' ' : ''}${m.name}`;
+
+    const tokens = String(m.sandbox || SANDBOX_DEFAULT).split(/\s+/).filter((x) => SANDBOX_ALLOWLIST.has(x));
+    const access = [t('shell.apps.consent.accessData'), t('shell.apps.consent.accessShared')];
+    if (tokens.includes('allow-forms')) access.push(t('shell.apps.consent.sbForms'));
+    if (tokens.includes('allow-modals')) access.push(t('shell.apps.consent.sbModals'));
+    if (tokens.includes('allow-downloads')) access.push(t('shell.apps.consent.sbDownloads'));
+    if (tokens.includes('allow-popups')) access.push(t('shell.apps.consent.sbPopups'));
+    access.push(m.connectSrc.length ? t('shell.apps.consent.netHosts', { hosts: m.connectSrc.join(', ') }) : t('shell.apps.consent.netNone'));
+
+    const facts = h('dl', { class: 'modal-facts' },
+      h('dt', {}, t('shell.apps.consent.id')), h('dd', {}, h('code', {}, m.id)),
+      h('dt', {}, t('shell.apps.consent.version')), h('dd', {}, replacing ? `${oldVer} → ${m.version}` : m.version),
+      h('dt', {}, t('shell.apps.consent.files')), h('dd', {}, t('shell.apps.consent.filesValue', { n: pkg.files.size, size: fmtBytes(pkg.size) })),
+      h('dt', {}, t('shell.apps.consent.hash')),
+      h('dd', {}, h('code', { title: pkg.sha256 }, pkg.sha256.slice(0, 16) + '…'), h('div', { class: 'muted' }, t('shell.apps.consent.hashHint')))
+    );
+
+    let ack = null;
+    let danger = null;
+    if (replacing) {
+      ack = h('input', { type: 'checkbox', id: 'uapp-ack' });
+      danger = h('div', { class: 'modal-danger' },
+        h('p', {}, t('shell.apps.consent.replaceWarn', { name: m.name, from: oldVer })),
+        verCmp(m.version, oldVer) < 0 ? h('p', {}, t('shell.apps.consent.downgrade')) : null,
+        h('label', { for: 'uapp-ack' }, ack, h('span', {}, t('shell.apps.consent.replaceCheck')))
+      );
+    }
+
+    const cancelBtn = h('button', { class: 'btn', type: 'button' }, t('shell.apps.consent.cancel'));
+    const goBtn = h('button', { class: 'btn go', type: 'button', disabled: replacing }, replacing ? t('shell.apps.consent.replace') : t('shell.apps.consent.install'));
+    if (ack) ack.addEventListener('change', () => { goBtn.disabled = !ack.checked; });
+
+    const dlg = h('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true', 'aria-labelledby': 'uapp-title', 'aria-describedby': 'uapp-warn' },
+      h('h3', { id: 'uapp-title' }, replacing ? t('shell.apps.consent.titleReplace', { name: displayName }) : t('shell.apps.consent.titleInstall', { name: displayName })),
+      m.description ? h('p', { class: 'muted' }, m.description) : null,
+      facts,
+      h('h4', {}, t('shell.apps.consent.access')),
+      h('ul', {}, ...access.map((a) => h('li', {}, a))),
+      h('p', { class: 'modal-warn', id: 'uapp-warn' }, t('shell.apps.consent.warn')),
+      danger,
+      h('div', { class: 'modal-actions' }, cancelBtn, goBtn)
+    );
+    const scrim = h('div', { class: 'modal-scrim' }, dlg);
+
+    const focusables = () => [...dlg.querySelectorAll('button, input')].filter((el) => !el.disabled);
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(false); return; }
+      if (e.key !== 'Tab') return;
+      const f = focusables();
+      if (!f.length) return;
+      const first = f[0];
+      const last = f[f.length - 1];
+      if (!dlg.contains(document.activeElement) || (e.shiftKey && document.activeElement === first)) { e.preventDefault(); (e.shiftKey ? last : first).focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    function finish(accepted) {
+      document.removeEventListener('keydown', onKey, true);
+      scrim.remove();
+      try { if (prevFocus && prevFocus.focus) prevFocus.focus(); } catch { /* noop */ }
+      resolve(accepted);
+    }
+    cancelBtn.addEventListener('click', () => finish(false));
+    goBtn.addEventListener('click', () => { if (!goBtn.disabled) finish(true); });
+    scrim.addEventListener('mousedown', (e) => { if (e.target === scrim) finish(false); });
+    document.addEventListener('keydown', onKey, true);
+    document.body.append(scrim);
+    cancelBtn.focus(); // focus initial sur « Annuler » : jamais d'installation par Entrée réflexe
+  });
+}
+
+/** Écrit le paquet sous apps:<id>/ ; en cas d'échec, restaure l'état précédent. */
+async function writeAppPackage(id, pkg, existing) {
+  const base = `apps:${id}`;
+  const previous = new Map();
+  if (existing) {
+    for (const vp of await state.vfs.walk(base)) previous.set(vp, await state.vfs.readBinary(vp));
+  }
+  const written = [];
+  try {
+    for (const [rel, bytes] of pkg.files) {
+      const vp = `${base}/${rel}`;
+      await state.vfs.writeBinary(vp, bytes);
+      written.push(vp);
+    }
+    // Fichiers de l'ancienne version absents du nouveau paquet : supprimés
+    // (le code seul vit ici ; les données de l'app sont sous data:<id>/, intactes).
+    for (const vp of previous.keys()) {
+      if (!pkg.files.has(vp.slice(base.length + 1))) await state.vfs.remove(vp);
+    }
+  } catch (err) {
+    for (const vp of written) {
+      if (!previous.has(vp)) { try { await state.vfs.remove(vp); } catch { /* best-effort */ } }
+    }
+    for (const [vp, buf] of previous) { try { await state.vfs.writeBinary(vp, buf); } catch { /* best-effort */ } }
+    throw err;
+  }
+}
+
+async function installUappBytes(u8) {
+  if (!window.USBosUapp) throw new Error(t('shell.apps.unavailable'));
+  if (state.guest) throw new Error(t('shell.apps.guestBlocked'));
+  let pkg;
+  try {
+    pkg = await window.USBosUapp.parseUapp(u8);
+  } catch (err) {
+    throw new Error(t('shell.apps.badPackage', { error: String((err && err.message) || err).replace(/^uapp:\s*/, '') }));
+  }
+  const id = pkg.manifest.id;
+
+  let managed = BUILTIN_APP_IDS.has(id);
+  if (!managed) {
+    try {
+      const src = await state.vfs.readJSON('config:update-sources.json');
+      managed = !!(src && src.apps && Object.prototype.hasOwnProperty.call(src.apps, id));
+    } catch { /* pas de sources configurées : rien n'est géré */ }
+  }
+  if (managed) throw new Error(t('shell.apps.builtinReserved', { id }));
+
+  const existing = state.apps.get(id) || null;
+  if (!(await showInstallConsent({ pkg, existing }))) return { cancelled: true };
+
+  if (state.activeAppId === id) closeActiveApp();
+  try {
+    await writeAppPackage(id, pkg, existing);
+  } catch (err) {
+    log(`Installation de ${id} échouée, état précédent restauré : ${err && err.message}`, 'w');
+    throw new Error(t('shell.apps.installFailed', { error: (err && err.message) || String(err) }));
+  }
+  // Trace d'audit : qui a été installé, quelle version, quelle empreinte.
+  window.USBosLog.warn('kernel', `App ${existing ? 'remplacée' : 'installée'} depuis un paquet : ${id} ${pkg.manifest.version} (sha256 ${pkg.sha256})`);
+  await loadInstalledApps();
+  renderDesktop();
+  const oldVer = existing && existing.manifest ? existing.manifest.version : '';
+  toast(existing
+    ? t('shell.apps.updated', { name: pkg.manifest.name, from: oldVer || '?', to: pkg.manifest.version })
+    : t('shell.apps.installed', { name: pkg.manifest.name, version: pkg.manifest.version }));
+  return { installed: true, id, version: pkg.manifest.version, replaced: !!existing };
+}
+
+async function withUappLock(fn) {
+  if (uappBusy) throw new Error(t('shell.apps.busy'));
+  uappBusy = true;
+  try { return await fn(); } finally { uappBusy = false; }
+}
+
+async function installUappFileUnlocked(file) {
+  const max = window.USBosUapp ? window.USBosUapp.LIMITS.maxPackage : 40 * 1024 * 1024;
+  if (file.size > max) throw new Error(t('shell.apps.tooLarge', { max: Math.round(max / 1048576) }));
+  return installUappBytes(new Uint8Array(await file.arrayBuffer()));
+}
+
+function pickUappFile() {
+  return new Promise((resolve) => {
+    const inp = h('input', { type: 'file', accept: '.uapp,.zip,application/zip', style: 'display:none', 'aria-label': t('shell.apps.pickAria') });
+    inp.addEventListener('change', () => { resolve(inp.files[0] || null); inp.remove(); });
+    inp.addEventListener('cancel', () => { resolve(null); inp.remove(); });
+    document.body.append(inp);
+    inp.click();
+  });
+}
+
+/** Sélecteur de fichier → validation → consentement → installation. */
+function installUappInteractive() {
+  return withUappLock(async () => {
+    const file = await pickUappFile();
+    return file ? installUappFileUnlocked(file) : { cancelled: true };
+  });
+}
+
+function installUappFile(file) {
+  return withUappLock(() => installUappFileUnlocked(file));
+}
+
 /**
  * Chiffrement transparent des données d'apps (scheme "data:" uniquement).
  * system:/apps:/config: restent en clair (nécessaire au fonctionnement du
@@ -1957,6 +2170,32 @@ function escapeForInlineScript(jsonString) {
 const SANDBOX_ALLOWLIST = new Set(['allow-scripts', 'allow-forms', 'allow-modals', 'allow-downloads', 'allow-popups']);
 const SANDBOX_DEFAULT = 'allow-scripts allow-forms allow-modals allow-downloads';
 
+// Hôtes réseau qu'une app peut déclarer (manifest.csp.connectSrc). Le manifeste
+// est une entrée NON FIABLE (un .uapp tiers en écrit un) et l'entrée finit dans
+// un attribut HTML ET dans une directive CSP : sans filtre, `https://a.com; default-src *`
+// élargirait la CSP et un `"` sortirait de l'attribut. Seuls https/wss + nom de
+// domaine minuscule (TLD alphabétique : ni IPv4, ni localhost, ni joker) passent.
+// MIROIR EXACT de CONNECT_SRC_RE dans system/uapp.js — tools/test-uapp.cjs vérifie
+// que les deux littéraux restent identiques. Volontairement dupliqué ici : ce
+// filtre protège CHAQUE ouverture d'app et ne doit pas dépendre d'un module optionnel.
+const CONNECT_SRC_RE = /^(?:https|wss):\/\/(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9](?::[0-9]{1,5})?$/;
+const CONNECT_SRC_MAX = 10;
+
+function sanitizeConnectSrc(list) {
+  const ok = [];
+  const rejected = [];
+  for (const v of (Array.isArray(list) ? list : [])) {
+    const str = typeof v === 'string' ? v : '';
+    if (str.length <= 253 && CONNECT_SRC_RE.test(str)) {
+      if (!ok.includes(str) && ok.length < CONNECT_SRC_MAX) ok.push(str);
+    } else {
+      rejected.push(String(v).slice(0, 60));
+    }
+  }
+  if (rejected.length) window.USBosLog.warn('kernel', `csp.connectSrc : entrée(s) refusée(s) (${rejected.join(', ')})`);
+  return ok;
+}
+
 function sanitizeSandbox(value) {
   const raw = String(value || SANDBOX_DEFAULT).split(/\s+/).filter(Boolean);
   const kept = raw.filter((t) => SANDBOX_ALLOWLIST.has(t));
@@ -2000,9 +2239,8 @@ function buildSandboxSrcdoc(id, manifest, code) {
   // devraient parler qu'au kernel via postMessage). Une app qui a un besoin
   // réseau légitime (ex. Mesh/WebRTC signaling) le déclare dans son
   // manifest.json (`csp.connectSrc`), jamais implicitement.
-  const cspConnect = (Array.isArray(manifest.csp && manifest.csp.connectSrc) && manifest.csp.connectSrc.length)
-    ? manifest.csp.connectSrc.map((s) => String(s)).join(' ')
-    : "'none'";
+  const connectHosts = sanitizeConnectSrc(manifest.csp && manifest.csp.connectSrc);
+  const cspConnect = connectHosts.length ? connectHosts.join(' ') : "'none'";
   const csp = `default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; connect-src ${cspConnect}; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none';`;
   return `<!DOCTYPE html><html lang="${appLang}" data-theme="${resolveThemeName()}" data-accent="${currentThemePrefs().accent}" data-radius="${uip.radius}" data-fs="${uip.fs}" data-density="${uip.density}" data-barpos="${uip.barpos}" data-side="${uip.side}"><head><meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="${csp}">
@@ -3299,6 +3537,17 @@ function renderSettings(stage) {
     updCtl.append(msg);
     const appsCtl = setItem(card, '🧩', t('shell.settings.sysApps'), tp('shell.settings.sysAppsCount', state.apps.size));
     appsCtl.append(h('span', { class: 'muted' }, [...state.apps.values()].map((a) => a.manifest.name || a.manifest.id).join(', ') || '—'));
+    const instCtl = setItem(card, '📦', t('shell.settings.appInstall'), t('shell.settings.appInstallDetail'));
+    const instMsg = h('div', { class: 'muted', role: 'status' });
+    instCtl.append(h('button', { class: 'btn', type: 'button', onclick: async () => {
+      instMsg.textContent = '';
+      try {
+        const r = await installUappInteractive();
+        if (r && r.installed) openPage('settings'); // relit la liste des apps
+      } catch (err) {
+        instMsg.textContent = (err && err.message) || String(err);
+      }
+    } }, t('shell.settings.appInstallBtn')), instMsg);
     const guideCtl = setItem(card, '📘', t('shell.settings.sysGuide'), t('shell.settings.sysGuideDetail'));
     guideCtl.append(h('a', { class: 'btn', href: 'https://github.com/DakinDrago/USBos', target: '_blank', rel: 'noopener noreferrer' }, t('shell.settings.sysGuideBtn')));
   });
@@ -3963,6 +4212,7 @@ window.USBosKernel = {
   get version() { return KERNEL_VERSION; },
   get keyId() { return state.keyId; },
   openApp, closeActiveApp, goToDesktop, checkForUpdates, applyUpdatePlan, switchKeyFlow, connectFlow, guestPickFlow,
+  installUappInteractive, installUappFile, installUappBytes,
   setPassphrase, removePassphrase, changePassphrase, setTheme, setWallpaper, importWallImage, removeWallImage, addCustomTheme, removeCustomTheme,
   previewCustomTheme, clearCustomPreview, setUiPrefs, openPage, renderDesktop,
   t, tp, tx, currentLang, langLocale, availableLangs, langDisplayName, setLang, loadLangs, validateLangPack,

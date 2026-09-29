@@ -20,6 +20,8 @@
   "importBtn": "Importer",
   "importFailed": "Échec d’import : {error}",
   "imported": "Importé : {name}",
+  "loadFailed": "Chargement impossible : {error}",
+  "maxSize": "données trop volumineuses (max {max} Mo)",
   "new": "Nouveau",
   "noResult": "Aucun résultat.",
   "noname": "(sans nom)",
@@ -34,5 +36,6 @@
   "searchAria": "Rechercher dans les documents",
   "searchPh": "Rechercher… ( / )",
   "sharedNone": "Aucun .md dans Partage/.",
-  "titlePh": "Nom du document…"
+  "titlePh": "Nom du document…",
+  "truncated": "Document tronqué à {max} caractères."
 }

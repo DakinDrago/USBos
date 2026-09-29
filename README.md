@@ -74,6 +74,10 @@ Aucun serveur, aucune installation, aucun compte à créer. Ce qui est sur la cl
 | 🗒️ **Notes** | Notes rapides avec titre et contenu, recherche intégrée |
 | 🧰 **Boîte à outils** | Petits utilitaires (copie, conversions…) |
 
+## Installer une app tierce (`.uapp`)
+
+Au-delà des 7 apps intégrées, USBos peut installer une app tierce depuis un fichier **`.uapp`** — un simple ZIP renommé, que n'importe quel outil de compression (sur n'importe quel OS) sait produire à partir d'un dossier d'app. Depuis **Réglages → Système → Installer une app**, choisis le fichier : une boîte de dialogue affiche l'identifiant, la version, le nombre de fichiers, l'empreinte SHA-256, et exactement les permissions/accès réseau demandés — rien n'est écrit sur ta clé sans que tu confirmes. Rien n'est non plus signé ni vérifié par qui que ce soit : n'installe que ce que tu as toi-même construit ou obtenu d'une source de confiance.
+
 ## Sécurité et vie privée — ce qu'il faut savoir
 
 - Le contenu de tes apps (`data/`) est chiffré avec **AES-GCM** (clé dérivée de ta passphrase par PBKDF2, 210 000 itérations) — un standard robuste et éprouvé.
@@ -112,6 +116,7 @@ USBos/
 │   │   ├── kernel.js                 # boot, shell UI, chiffrement, pont RPC
 │   │   ├── kernel.css
 │   │   ├── vfs.js                    # système de fichiers virtuel
+│   │   ├── uapp.js                   # lecteur/validateur de paquets .uapp (apps tierces)
 │   │   ├── crypto.js                 # PBKDF2 + AES-GCM
 │   │   ├── logbus.js                 # journal mémoire (dmesg-like)
 │   │   ├── console.js                # API window.usbos / u + palette
@@ -163,7 +168,9 @@ USBos/
     ├── validate-lang.py
     ├── gen_files_json.py
     ├── upack.py
+    ├── uapp.py
     ├── test-lang.cjs
+    ├── test-uapp.cjs
     └── test-upack.cjs
 ```
 
@@ -212,8 +219,10 @@ python tools/release.py
 python tools/validate-versions.py      # cohérence des versions dans tout le dépôt
 python tools/validate-lang.py          # symétrie des dictionnaires FR/EN
 node tools/test-lang.cjs               # tests runtime sur les traductions
+node tools/test-uapp.cjs               # tests du lecteur .uapp (paquets fabriqués, y compris hostiles)
 python tools/release.py                # la commande unique : synchronise tout et reconstruit installer.html
 python tools/upack.py pack|verify|unpack ...   # conteneur .upack (exports/imports)
+python tools/uapp.py pack|verify|unpack ...    # paquet .uapp (apps tierces, ZIP renommé)
 python skills/usbos-app/validate.py USBos/apps/<id>/   # valider une nouvelle app
 ```
 

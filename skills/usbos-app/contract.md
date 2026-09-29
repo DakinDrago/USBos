@@ -114,3 +114,36 @@ return USBosApp;                     // top-level return: legal, code runs via n
   provides the single styled scrollbar.
 - `prefers-reduced-motion` is neutralized kernel-side; keep your own
   animations ≤ 200 ms.
+## Distribution — `.uapp` package
+
+A third-party app (anything outside the 7 built-in ones) reaches a
+user's key as a **`.uapp` file — a plain ZIP, renamed**. Any zip tool on
+any OS can produce one (right-click your app folder → Compress); nothing
+exotic. Build and check yours with:
+
+```bash
+python tools/uapp.py pack   apps/my-app my-app.uapp
+python tools/uapp.py verify my-app.uapp
+```
+
+Requirements, enforced by both the packer and the kernel's reader
+(`system/uapp.js`) before anything is written to the key:
+- `manifest.json` + `lang/fr.json` + `lang/en.json` at the root of the
+  archive (or inside a single enclosing folder — stripped automatically,
+  so "compress the folder" on Windows/macOS works as-is).
+- `id`: lowercase, `^[a-z0-9][a-z0-9-]{0,63}$`, and not one of the
+  reserved/built-in ids (`system`, `apps`, `data`, `shared`, `config`,
+  `agenda`, `coffre`, `gallery`, `markdown`, `mesh`, `notes`, `toolbox`,
+  …) — a `.uapp` can never silently take over an existing app's storage.
+- `version`: semver (`x.y(.z…)`), `entry`: a `.js` file present in the
+  package.
+- `csp.connectSrc` (see above): each entry must be `https://` or
+  `wss://` to a real hostname, no wildcards.
+
+The user installs it from **Settings → System → Install an app**, or
+`usbos.apps.install(vpath)` in DevTools. They see an on-screen consent
+dialog (id, version, file count, SHA-256, exactly which sandbox
+permissions and network hosts the app gets) before a single byte is
+written — nothing is signed or vetted, so that dialog is the only thing
+standing between the user and whatever the package contains. Don't try
+to work around it or auto-accept it.
