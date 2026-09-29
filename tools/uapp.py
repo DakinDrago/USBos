@@ -1,17 +1,17 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
-USBos â€” tools/uapp.py
+USBos — tools/uapp.py
 
-Construit un paquet .uapp (ZIP standard renommÃ©) Ã  partir d'un dossier
-d'app â€” pour la distribution d'une app tierce, HORS du monorepo officiel
-(les 7 apps intÃ©grÃ©es, elles, sont livrÃ©es par l'updater normal, jamais
-par .uapp â€” voir BUILTIN_APP_IDS dans kernel.js).
+Construit un paquet .uapp (ZIP standard renommé) à partir d'un dossier
+d'app — pour la distribution d'une app tierce, HORS du monorepo officiel
+(les 7 apps intégrées, elles, sont livrées par l'updater normal, jamais
+par .uapp — voir BUILTIN_APP_IDS dans kernel.js).
 
 Le format n'a RIEN d'exotique : n'importe quel outil de compression ZIP
 (y compris "Compresser" dans l'explorateur de fichiers, sur n'importe quel
 OS) produit un fichier que le lecteur (system/uapp.js) accepte, tant que
-le dossier compressÃ© contient bien manifest.json + lang/fr.json +
-lang/en.json Ã  sa racine (ou dans un unique dossier englobant â€” le lecteur
+le dossier compressé contient bien manifest.json + lang/fr.json +
+lang/en.json à sa racine (ou dans un unique dossier englobant — le lecteur
 le retire automatiquement).
 
 Usage :
@@ -19,10 +19,10 @@ Usage :
     python tools/uapp.py verify mon-app.uapp
     python tools/uapp.py unpack mon-app.uapp --out /tmp/mon-app
 
-La validation de Â« verify Â» est volontairement plus stricte que le strict
-nÃ©cessaire pour lire le ZIP : elle applique les mÃªmes rÃ¨gles que le noyau
-(system/uapp.js) va appliquer Ã  l'installation, pour repÃ©rer les soucis
-AVANT de distribuer le paquet plutÃ´t qu'aprÃ¨s.
+La validation de « verify » est volontairement plus stricte que le strict
+nécessaire pour lire le ZIP : elle applique les mêmes règles que le noyau
+(system/uapp.js) va appliquer à l'installation, pour repérer les soucis
+AVANT de distribuer le paquet plutôt qu'après.
 """
 import hashlib
 import json
@@ -74,7 +74,7 @@ def cmd_pack(src_dir: str, out_path: str) -> int:
         return 1
     for code in ("fr", "en"):
         if not (src / "lang" / f"{code}.json").is_file():
-            print(f"Erreur : lang/{code}.json absent â€” chaque app porte ses traductions (rÃ¨gle USBos).")
+            print(f"Erreur : lang/{code}.json absent — chaque app porte ses traductions (règle USBos).")
             return 1
 
     files = list(iter_source_files(src))
@@ -100,7 +100,7 @@ def cmd_pack(src_dir: str, out_path: str) -> int:
     with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         for rel, p in files:
             zi = zipfile.ZipInfo(rel, date_time=(1980, 1, 1, 0, 0, 0))  # horodatage stable -> paquet reproductible
-            zi.external_attr = (0o100644 << 16)  # fichier rÃ©gulier, permissions ordinaires
+            zi.external_attr = (0o100644 << 16)  # fichier régulier, permissions ordinaires
             with p.open("rb") as f:
                 z.writestr(zi, f.read())
     tmp.replace(out)
@@ -122,7 +122,7 @@ def _validate_manifest(m: dict, present: set) -> list:
     if not isinstance(mid, str) or not ID_RE.match(mid):
         errs.append(f"id invalide : {mid!r}")
     elif mid in RESERVED_IDS:
-        errs.append(f"id rÃ©servÃ© : {mid!r}")
+        errs.append(f"id réservé : {mid!r}")
     name = m.get("name")
     if not isinstance(name, str) or not name.strip() or len(name) > 60:
         errs.append(f"name invalide : {name!r}")
@@ -142,12 +142,12 @@ def _validate_manifest(m: dict, present: set) -> list:
             cs = csp.get("connectSrc")
             if cs is not None:
                 if not isinstance(cs, list) or len(cs) > 10:
-                    errs.append("csp.connectSrc invalide (liste de 10 entrÃ©es max)")
+                    errs.append("csp.connectSrc invalide (liste de 10 entrées max)")
                 else:
                     host_re = re.compile(r"^(?:https|wss)://(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9](?::[0-9]{1,5})?$")
                     for v in cs:
                         if not isinstance(v, str) or not host_re.match(v):
-                            errs.append(f"csp.connectSrc : hÃ´te refusÃ© (doit Ãªtre https:// ou wss://, pas de joker) : {v!r}")
+                            errs.append(f"csp.connectSrc : hôte refusé (doit être https:// ou wss://, pas de joker) : {v!r}")
     return errs
 
 
@@ -176,7 +176,7 @@ def cmd_verify(uapp_path: str) -> int:
         print("Erreur : paquet sans fichier.")
         return 1
 
-    # Dossier englobant unique -> on le retire pour la suite des vÃ©rifs (miroir du lecteur JS).
+    # Dossier englobant unique -> on le retire pour la suite des vérifs (miroir du lecteur JS).
     strip = ""
     if "manifest.json" not in names:
         tops = {n.split("/", 1)[0] for n in names}
@@ -187,19 +187,19 @@ def cmd_verify(uapp_path: str) -> int:
     errs = []
     for rel in rel_names:
         if ".." in rel.split("/") or rel.startswith("/") or "\\" in rel:
-            errs.append(f"chemin illÃ©gal : {rel!r}")
+            errs.append(f"chemin illégal : {rel!r}")
         for seg in rel.split("/"):
             if not SEG_RE.match(seg):
-                errs.append(f"segment de chemin illÃ©gal : {seg!r} (dans {rel!r})")
+                errs.append(f"segment de chemin illégal : {seg!r} (dans {rel!r})")
                 break
     if len(rel_names) != len({n.lower() for n in rel_names}):
-        errs.append("collision de chemins insensible Ã  la casse (problÃ¨me sur clÃ© FAT/exFAT)")
+        errs.append("collision de chemins insensible à la casse (problème sur clé FAT/exFAT)")
     if "manifest.json" not in rel_names:
         errs.append("manifest.json absent")
     if "lang/fr.json" not in rel_names:
-        errs.append("lang/fr.json absent â€” chaque app porte ses traductions")
+        errs.append("lang/fr.json absent — chaque app porte ses traductions")
     if "lang/en.json" not in rel_names:
-        errs.append("lang/en.json absent â€” chaque app porte ses traductions")
+        errs.append("lang/en.json absent — chaque app porte ses traductions")
 
     manifest = None
     if "manifest.json" not in errs and "manifest.json" in rel_names:
@@ -225,7 +225,7 @@ def cmd_verify(uapp_path: str) -> int:
         for e in errs:
             print(f"  - {e}")
         return 1
-    print(f"{p} : valide â€” app {manifest['id']!r} v{manifest['version']} ({len(rel_names)} fichier(s), sha256={sha256_file(p)})")
+    print(f"{p} : valide — app {manifest['id']!r} v{manifest['version']} ({len(rel_names)} fichier(s), sha256={sha256_file(p)})")
     return 0
 
 
@@ -239,7 +239,7 @@ def cmd_unpack(uapp_path: str, out_dir: str) -> int:
                 continue
             rel = info.filename
             if ".." in pathlib.PurePosixPath(rel).parts or rel.startswith("/") or "\\" in rel:
-                print(f"Erreur : chemin illÃ©gal ignorÃ© : {rel!r}")
+                print(f"Erreur : chemin illégal ignoré : {rel!r}")
                 continue
             dest = out / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
