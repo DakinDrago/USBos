@@ -3,6 +3,7 @@
   "delete": "Suppr.",
   "deleted": "Supprimé : {name}",
   "download": "Télécharger",
+  "exportFailed": "Export impossible : {error}",
   "exportUpack": "Exporter .upack",
   "exportedUpack": "Exporté vers Partage/ : {name}",
   "extract": "Extraire ici",
@@ -10,6 +11,7 @@
   "helpLine": "Images, vidéos, audios + .upack · 256 Mo max par média · export .upack ≤ 64 Mo.",
   "hint": "Photos, vidéos et audios de la clé. Fichiers locaux : lecture directe. Conteneurs .upack vérifiés morceau par morceau.",
   "import": "Importer",
+  "importFailed": "Import impossible : {error}",
   "imported": "Importé : {name}",
   "localHint": "Choisis sur cet appareil : lus directement, rien n'est stocké.",
   "localPick": "Choisir des fichiers…",
@@ -28,5 +30,6 @@
   "upackInfo": "{name} · {size} · {chunks} morceaux · {mime}",
   "upackInvalid": ".upack invalide ou corrompu.",
   "upackTooBig": "Export .upack refusé au-delà de 64 Mo.",
+  "upackUnavailable": "Bibliothèque .upack indisponible.",
   "view": "Voir"
 }

@@ -1,39 +1,39 @@
-/* USBos — paquet d'application .uapp v1 (lecteur + validation).
+﻿/* USBos â€” paquet d'application .uapp v1 (lecteur + validation).
  *
- * Un .uapp est un ZIP STANDARD renommé : n'importe quel OS sait en créer un
- * (clic droit > compresser), et Chromium sait le décompresser nativement
- * (DecompressionStream 'deflate-raw'), donc aucune dépendance. Ce format est
- * distinct de .upack (conteneur mono-fichier découpé en morceaux, voir
+ * Un .uapp est un ZIP STANDARD renommÃ© : n'importe quel OS sait en crÃ©er un
+ * (clic droit > compresser), et Chromium sait le dÃ©compresser nativement
+ * (DecompressionStream 'deflate-raw'), donc aucune dÃ©pendance. Ce format est
+ * distinct de .upack (conteneur mono-fichier dÃ©coupÃ© en morceaux, voir
  * upack.js) : un .upack ne peut pas transporter une app multi-fichiers.
  *
- * Contenu attendu (à la racine, ou dans UN seul dossier englobant — ce que
- * produit « compresser le dossier » sous Windows/macOS) :
+ * Contenu attendu (Ã  la racine, ou dans UN seul dossier englobant â€” ce que
+ * produit Â« compresser le dossier Â» sous Windows/macOS) :
  *   manifest.json      id, name, version, entry [, icon, description, sandbox, csp]
  *   <entry>.js         code de l'app (classique, `return USBosApp`)
  *   lang/fr.json       traductions FR  } chaque app porte les siennes
  *   lang/en.json       traductions EN  }
- *   …                  autres fichiers (vendor/, images…)
+ *   â€¦                  autres fichiers (vendor/, imagesâ€¦)
  *
- * MODÈLE DE MENACE : le paquet est une entrée NON FIABLE. parseUapp() valide
+ * MODÃˆLE DE MENACE : le paquet est une entrÃ©e NON FIABLE. parseUapp() valide
  * TOUT (chemins, tailles, CRC, manifeste) et ne retourne rien tant que
- * quelque chose est douteux : l'appelant n'écrit donc jamais un paquet à
- * moitié valide. Refusés : chemins traversants/absolus/ambigus, collisions
- * de casse (FAT/exFAT), liens symboliques et fichiers spéciaux, entrées
- * chiffrées, ZIP64/multi-disques, bombes de décompression (taille réelle
- * comptée pendant le flux, pas seulement déclarée), en-têtes local/central
- * incohérents, entrées qui se chevauchent.
+ * quelque chose est douteux : l'appelant n'Ã©crit donc jamais un paquet Ã 
+ * moitiÃ© valide. RefusÃ©s : chemins traversants/absolus/ambigus, collisions
+ * de casse (FAT/exFAT), liens symboliques et fichiers spÃ©ciaux, entrÃ©es
+ * chiffrÃ©es, ZIP64/multi-disques, bombes de dÃ©compression (taille rÃ©elle
+ * comptÃ©e pendant le flux, pas seulement dÃ©clarÃ©e), en-tÃªtes local/central
+ * incohÃ©rents, entrÃ©es qui se chevauchent.
  *
- * Pur (aucun DOM) : utilisé par le noyau et par tools/test-uapp.cjs (Node).
+ * Pur (aucun DOM) : utilisÃ© par le noyau et par tools/test-uapp.cjs (Node).
  * Les erreurs sont techniques ('uapp: ...') : l'appelant les habille.
  */
 (function (root) {
   'use strict';
 
   const LIMITS = Object.freeze({
-    maxPackage: 40 * 1024 * 1024,   // taille du .uapp lui-même
+    maxPackage: 40 * 1024 * 1024,   // taille du .uapp lui-mÃªme
     maxEntries: 300,
-    maxFile: 25 * 1024 * 1024,      // par fichier, décompressé
-    maxTotal: 60 * 1024 * 1024,     // somme décompressée
+    maxFile: 25 * 1024 * 1024,      // par fichier, dÃ©compressÃ©
+    maxTotal: 60 * 1024 * 1024,     // somme dÃ©compressÃ©e
     maxPathLen: 200,
     maxSegLen: 100,
     maxDepth: 6,
@@ -43,21 +43,21 @@
   });
 
   const ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
-  // Identifiants réservés : espaces de noms du VFS et du noyau.
+  // Identifiants rÃ©servÃ©s : espaces de noms du VFS et du noyau.
   const RESERVED_IDS = Object.freeze(['system', 'shell', 'console', 'config', 'data', 'shared', 'update', 'root', 'kernel', 'usbos', 'apps']);
   // Segment de chemin : pas de point initial/final ni de ".." (un point n'est
-  // admis qu'entre deux caractères), ASCII simple compatible FAT/exFAT/NTFS.
+  // admis qu'entre deux caractÃ¨res), ASCII simple compatible FAT/exFAT/NTFS.
   const SEG_RE = /^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$/;
   const WIN_RESERVED_RE = /^(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i;
   const SEMVER_RE = /^\d+(?:\.\d+)+(?:-[0-9A-Za-z.-]+)?$/;
-  // Contrôles, DEL/C1 et marques bidirectionnelles (usurpation d'affichage).
+  // ContrÃ´les, DEL/C1 et marques bidirectionnelles (usurpation d'affichage).
   const UNSAFE_TEXT_RE = /[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
-  // Hôtes autorisés dans csp.connectSrc : https/wss, nom de domaine minuscule
-  // dont le TLD commence par une lettre (exclut IPv4 et noms à un seul
+  // HÃ´tes autorisÃ©s dans csp.connectSrc : https/wss, nom de domaine minuscule
+  // dont le TLD commence par une lettre (exclut IPv4 et noms Ã  un seul
   // label : pas de LAN/localhost), port optionnel. Aucun joker, aucun
-  // mot-clé CSP, aucun ';' ni guillemet possible.
-  // MIROIR EXACT de CONNECT_SRC_RE dans kernel.js — tools/test-uapp.cjs
-  // vérifie que les deux littéraux restent identiques.
+  // mot-clÃ© CSP, aucun ';' ni guillemet possible.
+  // MIROIR EXACT de CONNECT_SRC_RE dans kernel.js â€” tools/test-uapp.cjs
+  // vÃ©rifie que les deux littÃ©raux restent identiques.
   const CONNECT_SRC_RE = /^(?:https|wss):\/\/(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z][a-z0-9-]{0,61}[a-z0-9](?::[0-9]{1,5})?$/;
 
   function fail(msg) { throw new Error('uapp: ' + msg); }
@@ -128,15 +128,15 @@
     return path.startsWith('__MACOSX/') || base === '.DS_Store' || base === 'Thumbs.db' || base === 'desktop.ini' || base.startsWith('._');
   }
 
-  /** Lit le répertoire central. Retourne { entries, cdOff }. */
+  /** Lit le rÃ©pertoire central. Retourne { entries, cdOff }. */
   function readCentralDirectory(b) {
     if (b.length < 22) fail('too short');
     if (b.length > LIMITS.maxPackage) fail('package too large');
     if (!(b[0] === 0x50 && b[1] === 0x4b)) fail('not a zip (bad magic)');
 
-    // Fin de répertoire central : on ne retient que la signature dont
+    // Fin de rÃ©pertoire central : on ne retient que la signature dont
     // (position + 22 + longueur du commentaire) tombe EXACTEMENT en fin de
-    // fichier — un faux EOCD caché dans un commentaire est ainsi ignoré.
+    // fichier â€” un faux EOCD cachÃ© dans un commentaire est ainsi ignorÃ©.
     let eocd = -1;
     const min = Math.max(0, b.length - 22 - 0xFFFF);
     for (let i = b.length - 22; i >= min; i--) {
@@ -181,7 +181,7 @@
     return { entries, cdOff };
   }
 
-  /** Décompresse un flux deflate brut en plafonnant la sortie à `expected`. */
+  /** DÃ©compresse un flux deflate brut en plafonnant la sortie Ã  `expected`. */
   async function inflateRaw(u8, expected) {
     const reader = new Blob([u8]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();
     const out = new Uint8Array(expected);
@@ -195,7 +195,7 @@
         n += value.length;
       }
     } catch (e) {
-      try { await reader.cancel(); } catch (_) { /* déjà fermé */ }
+      try { await reader.cancel(); } catch (_) { /* dÃ©jÃ  fermÃ© */ }
       if (e && typeof e.message === 'string' && e.message.startsWith('uapp:')) throw e;
       fail('corrupt compressed data');
     }
@@ -241,14 +241,14 @@
   }
 
   /**
-   * Lit, valide et décompresse un .uapp. Ne retourne QUE si tout est sain.
+   * Lit, valide et dÃ©compresse un .uapp. Ne retourne QUE si tout est sain.
    * @returns {Promise<{manifest, files: Map<string,Uint8Array>, sha256, size, stripped, skipped}>}
    */
   async function parseUapp(input) {
     const b = input instanceof Uint8Array ? input : new Uint8Array(input);
     const { entries, cdOff } = readCentralDirectory(b);
 
-    // 1) Filtrage et contrôles par entrée (avant toute décompression).
+    // 1) Filtrage et contrÃ´les par entrÃ©e (avant toute dÃ©compression).
     const files = [];
     let skipped = 0;
     for (const e of entries) {
@@ -256,12 +256,12 @@
       if (e.flags & 0x0001 || e.flags & 0x0040) fail('encrypted entry unsupported');
       if (e.method !== 0 && e.method !== 8) fail('unsupported compression method');
       if (e.comp === 0xFFFFFFFF || e.size === 0xFFFFFFFF) fail('zip64 unsupported');
-      if ((e.madeBy >> 8) === 3) {                       // créé sous Unix : le mode est dans ext>>>16
+      if ((e.madeBy >> 8) === 3) {                       // crÃ©Ã© sous Unix : le mode est dans ext>>>16
         const type = (e.ext >>> 16) & 0xF000;
         if (type === 0xA000) fail('symbolic link refused: ' + show(e.name));
         if (type !== 0 && type !== 0x8000 && type !== 0x4000) fail('special file refused: ' + show(e.name));
       }
-      if (e.name.endsWith('/')) continue;                // dossier : rien à extraire
+      if (e.name.endsWith('/')) continue;                // dossier : rien Ã  extraire
       if (isJunk(e.name)) { skipped++; continue; }
       if (e.method === 0 && e.comp !== e.size) fail('stored entry size mismatch');
       if (e.size > LIMITS.maxFile) fail('file too large: ' + show(e.name));
@@ -269,14 +269,14 @@
     }
     if (!files.length) fail('package has no files');
 
-    // 2) Dossier englobant unique (« compresser le dossier ») : on le retire.
+    // 2) Dossier englobant unique (Â« compresser le dossier Â») : on le retire.
     let strip = '';
     if (!files.some((e) => e.name === 'manifest.json')) {
       const tops = new Set(files.map((e) => e.name.split('/')[0]));
       if (tops.size === 1 && files.every((e) => e.name.includes('/'))) strip = [...tops][0] + '/';
     }
 
-    // 3) Chemins finaux : légaux, sans doublon (casse ignorée), sans conflit fichier/dossier.
+    // 3) Chemins finaux : lÃ©gaux, sans doublon (casse ignorÃ©e), sans conflit fichier/dossier.
     const seen = new Map();
     let total = 0;
     for (const e of files) {
@@ -294,7 +294,7 @@
       }
     }
 
-    // 4) Extraction : en-tête local cohérent, pas de chevauchement, CRC exact.
+    // 4) Extraction : en-tÃªte local cohÃ©rent, pas de chevauchement, CRC exact.
     const ranges = [];
     const out = new Map();
     for (const e of files) {

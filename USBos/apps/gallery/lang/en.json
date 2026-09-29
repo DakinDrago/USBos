@@ -3,6 +3,7 @@
   "delete": "Del.",
   "deleted": "Deleted: {name}",
   "download": "Download",
+  "exportFailed": "Export failed: {error}",
   "exportUpack": "Export .upack",
   "exportedUpack": "Exported to Shared/: {name}",
   "extract": "Extract here",
@@ -10,6 +11,7 @@
   "helpLine": "Images, videos, audio + .upack · 256 MB max per media · .upack export ≤ 64 MB.",
   "hint": "Key photos, videos and audio. Local files: direct reading. .upack containers verified chunk by chunk.",
   "import": "Import",
+  "importFailed": "Import failed: {error}",
   "imported": "Imported: {name}",
   "localHint": "Picked on this device: read directly, nothing stored.",
   "localPick": "Pick files…",
@@ -28,5 +30,6 @@
   "upackInfo": "{name} · {size} · {chunks} chunks · {mime}",
   "upackInvalid": "Invalid or corrupt .upack.",
   "upackTooBig": ".upack export refused over 64 MB.",
+  "upackUnavailable": ".upack library unavailable.",
   "view": "View"
 }
