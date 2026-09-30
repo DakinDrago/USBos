@@ -70,7 +70,7 @@ Aucun serveur, aucune installation, aucun compte à créer. Ce qui est sur la cl
 | 🔐 **Coffre** | Gestionnaire d'identifiants (utilisateur/mot de passe), protégé par sa propre passphrase en plus du chiffrement général |
 | 🖼️ **Galerie** | Stockage et visionnage d'images et de vidéos |
 | 📝 **Markdown** | Rédaction de documents avec aperçu, export/import `.md` |
-| 📡 **Mesh** | Chat et transfert de fichiers directs entre deux clés USBos, en pair-à-pair (WebRTC) — aucun fichier ne transite par un serveur central |
+| 📡 **Mesh** | Chat et transfert de fichiers en pair-à-pair (WebRTC), avec messages privés et salons de groupe façon Discord — historique persisté, aucun fichier ne transite par un serveur central |
 | 🗒️ **Notes** | Notes rapides avec titre et contenu, recherche intégrée |
 | 🧰 **Boîte à outils** | Petits utilitaires (copie, conversions…) |
 

@@ -21,6 +21,20 @@ const STYLE = `
 .mesh-app .peer .n{font-weight:600;font-size:13px;font-family:'JetBrains Mono',ui-monospace,monospace}
 .mesh-app .peer .acts{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
 .mesh-app .peer select{background:var(--bg);border:1px solid var(--border);border-radius:7px;color:var(--text);font-size:12px;padding:6px 8px;outline:none;max-width:180px}
+.mesh-app .meshbody{display:flex;gap:12px;flex:1;min-height:0}
+.mesh-app .convlist{width:190px;flex:0 0 190px;display:flex;flex-direction:column;gap:10px;overflow-y:auto}
+.mesh-app .convgroup .clabel{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em;padding:0 4px 4px}
+.mesh-app .convitem{display:flex;align-items:center;gap:8px;padding:8px 9px;border-radius:8px;cursor:pointer;background:var(--panel);border:1px solid transparent;margin-bottom:4px}
+.mesh-app .convitem:hover{border-color:var(--border)}
+.mesh-app .convitem.active{background:var(--panel2);border-color:var(--accent)}
+.mesh-app .convitem .cdot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:0 0 auto}
+.mesh-app .convitem .cdot.on{background:var(--ok)}
+.mesh-app .convitem .cname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}
+.mesh-app .convitem .badge{background:var(--accent);color:#fff;border-radius:10px;font-size:11px;padding:1px 7px;font-weight:600;flex:0 0 auto}
+.mesh-app .convpanel{flex:1;min-width:0;display:flex;flex-direction:column;gap:10px;min-height:0}
+.mesh-app .convhead{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.mesh-app .convhead h3{font-size:14px;margin:0;font-family:'JetBrains Mono',ui-monospace,monospace}
+.mesh-app .convhead .chint{color:var(--muted);font-size:11.5px}
 .mesh-app .chat{background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:10px 12px;flex:1;min-height:200px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;font-size:13px}
 .mesh-app .msg{max-width:75%;padding:6px 10px;border-radius:8px;background:var(--panel2)}
 .mesh-app .msg.me{align-self:flex-end;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff}
@@ -28,7 +42,6 @@ const STYLE = `
 .mesh-app .msg.file{display:flex;align-items:center;gap:8px}
 .mesh-app .sendrow{display:flex;gap:8px}
 .mesh-app .sendrow input[type=text]{flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:9px 11px;font:inherit;outline:none}
-.mesh-app .sendrow select{background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);padding:9px 11px;font:inherit;outline:none;max-width:200px}
 .mesh-app .btn{background:linear-gradient(135deg,var(--accent),var(--accent2));border:none;border-radius:8px;color:#fff;font-weight:600;padding:8px 14px}
 .mesh-app .btn:hover{filter:brightness(1.1)}
 .mesh-app .mini{background:var(--panel2);border:1px solid var(--border);border-radius:7px;color:var(--text);font-size:12px;padding:6px 11px}
@@ -92,7 +105,6 @@ const MAX_PIECES = 4096;
 const ACK_TIMEOUT_MS = 10000;
 const MAX_ACK_RETRIES = 9; // couvre la fenêtre d'acceptation manuelle (60 s)
 const TRANSFER_TIMEOUT_MS = 120000;
-const MAX_CHAT_MSGS = 50;
 const MAX_EARLY_QUEUE = 20;
 // Garde-fous mémoire (un pair est du code distant) :
 // - transferts entrants simultanés : au-delà, on refuse l'annonce ;
@@ -177,9 +189,9 @@ const USBosApp = {
     if (cfg.keyId) idCard.append(el('span', 'hint', t('mesh.keyIdLabel', { id: cfg.keyId })));
 
     const connectIn = el('input'); connectIn.placeholder = t('mesh.joinPh');
-    const groupSel = el('select'); groupSel.setAttribute('aria-label', t('mesh.groupJoinScope'));
+    const joinGroupSel = el('select'); joinGroupSel.setAttribute('aria-label', t('mesh.groupJoinScope'));
     const connectBtn = el('button', 'btn', t('mesh.connect'));
-    const connectRow = el('div', 'connectrow'); connectRow.append(connectIn, groupSel, connectBtn);
+    const connectRow = el('div', 'connectrow'); connectRow.append(connectIn, joinGroupSel, connectBtn);
 
     // Carte salons de groupe.
     const groupCard = el('div', 'groupcard');
@@ -193,26 +205,26 @@ const USBosApp = {
 
     const invitesBox = el('div', 'peers');
     const transfersBox = el('div', 'peers');
-    const peersBox = el('div', 'peers');
+
+    // ---- Barre latérale des conversations (DM + salons), façon Discord ----
+    const convList = el('div', 'convlist');
+    const convHead = el('div', 'convhead');
     const chat = el('div', 'chat');
     const clearChatBtn = el('button', 'mini', t('mesh.clearChat'));
-    clearChatBtn.onclick = () => {
-      for (const u of blobUrls) { try { URL.revokeObjectURL(u); } catch { /* noop */ } }
-      blobUrls.clear();
-      chat.innerHTML = '';
-    };
     const msgIn = el('input'); msgIn.type = 'text'; msgIn.placeholder = t('mesh.msgPh'); msgIn.disabled = true;
-    const scopeSel = el('select'); scopeSel.setAttribute('aria-label', t('mesh.scopeLabel')); scopeSel.disabled = true;
     const sendBtn = el('button', 'btn', t('mesh.send')); sendBtn.disabled = true;
-    const sendRow = el('div', 'sendrow'); sendRow.append(msgIn, scopeSel, sendBtn, clearChatBtn);
+    const sendRow = el('div', 'sendrow'); sendRow.append(msgIn, sendBtn, clearChatBtn);
     const drop = el('div', 'dropzone', t('mesh.dropHint'));
     const filePick = el('input'); filePick.type = 'file';
     filePick.onchange = async () => { const f = filePick.files[0]; if (f) await sendFile(f); filePick.value = ''; };
+    const convPanel = el('div', 'convpanel');
+    convPanel.append(convHead, chat, sendRow, drop, filePick);
+    const meshBody = el('div', 'meshbody'); meshBody.append(convList, convPanel);
 
     wrap.append(
       el('h2', null, t('mesh.title')),
       el('p', 'hint', t('mesh.hint')),
-      idCard, connectRow, groupCard, invitesBox, transfersBox, peersBox, chat, sendRow, drop, filePick,
+      idCard, connectRow, groupCard, invitesBox, transfersBox, meshBody,
       el('p', 'hint', t('mesh.helpLine'))
     );
     stage.append(wrap);
@@ -232,6 +244,16 @@ const USBosApp = {
     const doneAcks = new Map(); // id -> {peer} : transferts reçus (renvoie packDone 60 s)
     const doneAckTimers = new Set(); // timers de purge des doneAcks (nettoyés à l'unmount)
     let recvReservedBytes = 0; // octets réservés par les transferts en cours (budget global)
+    // ---- Conversations (DM + salons) : historique persisté, UI façon Discord ----
+    // key = `dm:<peerId>` ou `grp:<code>`. Une conversation DM apparaît dès la
+    // connexion (ou à la réception d'un message passé, via l'historique) et
+    // SURVIT à la déconnexion (comme Discord) : seul le composeur se
+    // désactive tant que le pair n'est pas reconnecté.
+    const HISTORY_FILE = 'mesh-history.json';
+    const MAX_HISTORY_PER_CONV = 200;
+    const conversations = new Map(); // key -> {kind:'dm'|'grp', id, name, messages:[], unread}
+    let activeConvKey = null;
+    let historyLoadError = null;
     // Levé par meshCleanup. ensurePeer() n'est PAS attendu au montage (la
     // connexion passive doit rester rapide) : sans ce drapeau, une ouverture
     // encore en vol assignait `peer` APRÈS le nettoyage, laissant un Peer et
@@ -315,76 +337,266 @@ const USBosApp = {
       // capacité d'un pair qui n'est plus là.
       peerCaps.delete(peerId);
       for (const m of groupMembers.values()) m.delete(peerId);
-      if (render !== false) { renderPeers(); renderGroups(); updateSendEnabled(); }
+      if (render !== false) { renderGroups(); renderConvList(); refreshConvHead(); }
     }
 
-    function renderScope() {
-      const prev = scopeSel.value;
-      scopeSel.innerHTML = '';
-      const all = document.createElement('option');
-      all.value = 'all'; all.textContent = t('mesh.scopeAll');
-      scopeSel.append(all);
-      for (const code of myGroupCodes()) {
-        const o = document.createElement('option');
-        o.value = code; o.textContent = groupName(code);
-        scopeSel.append(o);
-      }
-      scopeSel.value = (prev === 'all' || cfg.groups[prev]) ? prev : 'all';
-      scopeSel.disabled = conns.size === 0;
-    }
-
-    function renderGroupSel() {
-      const prev = groupSel.value;
-      groupSel.innerHTML = '';
+    function renderJoinGroupSel() {
+      const prev = joinGroupSel.value;
+      joinGroupSel.innerHTML = '';
       const none = document.createElement('option');
       none.value = ''; none.textContent = t('mesh.groupNone');
-      groupSel.append(none);
+      joinGroupSel.append(none);
       for (const code of myGroupCodes()) {
         const o = document.createElement('option');
         o.value = code; o.textContent = `${groupName(code)} (${code})`;
-        groupSel.append(o);
+        joinGroupSel.append(o);
       }
-      groupSel.value = cfg.groups[prev] ? prev : '';
+      joinGroupSel.value = cfg.groups[prev] ? prev : '';
     }
 
-    function renderPeers() {
-      peersBox.innerHTML = '';
-      if (conns.size === 0) { peersBox.append(el('div', 'empty', t('mesh.noPeers'))); return; }
-      for (const id of conns.keys()) {
-        const row = el('div', 'peer');
-        row.append(el('span', 'n', id));
-        const acts = el('div', 'acts');
-        const inv = el('button', 'mini', t('mesh.inviteBtn'));
-        inv.onclick = () => {
-          // Remplace le bouton par un choix de salon à proposer.
-          acts.innerHTML = '';
-          const sel = document.createElement('select');
-          for (const code of myGroupCodes()) {
-            const o = document.createElement('option');
-            o.value = code; o.textContent = groupName(code);
-            sel.append(o);
-          }
-          if (!myGroupCodes().length) { renderPeers(); return; }
-          const go = el('button', 'mini', t('mesh.inviteSend'));
-          go.onclick = () => {
-            try { conns.get(id).send({ type: 'invite', group: sel.value, name: groupName(sel.value), from: cfg.myId }); } catch (err) { ctx.ui.log(`mesh: invitation échouée (${err.message})`); }
-            try { ctx.ui.toast(t('mesh.inviteSent', { peer: id })); } catch { /* noop */ }
-            renderPeers();
-          };
-          acts.append(sel, go);
-        };
-        const disc = el('button', 'mini', t('mesh.disconnect'));
-        disc.onclick = () => { try { conns.get(id).close(); } catch { /* noop */ } removePeerEverywhere(id); };
-        acts.append(inv, disc);
-        row.append(acts);
-        peersBox.append(row);
+    // ---------------------------------------------------------------
+    // Conversations (DM + salons) : un historique par conversation,
+    // persisté, affiché dans une barre latérale — on clique, on parle.
+    // ---------------------------------------------------------------
+    function convKeyFor(kind, id) { return `${kind === 'grp' ? 'grp' : 'dm'}:${id}`; }
+
+    function getOrCreateConv(kind, id, name) {
+      const key = convKeyFor(kind, id);
+      let conv = conversations.get(key);
+      if (!conv) {
+        conv = { kind, id, name: name || id, messages: [], unread: 0 };
+        conversations.set(key, conv);
+      } else if (name && conv.name !== name) {
+        conv.name = name;
       }
+      return conv;
+    }
+
+    function removeConv(kind, id) {
+      const key = convKeyFor(kind, id);
+      conversations.delete(key);
+      if (activeConvKey === key) { activeConvKey = null; renderChatPlaceholder(); }
+      void saveHistory();
+    }
+
+    async function saveHistory() {
+      if (historyLoadError) return; // écriture initiale déjà en échec : ne pas écraser un historique qu'on n'a pas pu relire
+      const out = {};
+      for (const [key, conv] of conversations) {
+        // Les fichiers ne survivent pas au rechargement (blob révoqué) : on
+        // garde leurs métadonnées (nom, taille) mais jamais le blobUrl.
+        out[key] = {
+          kind: conv.kind, id: conv.id, name: conv.name,
+          messages: conv.messages.slice(-MAX_HISTORY_PER_CONV).map((m) => ({ ...m, blobUrl: null, expired: m.kind === 'file' ? true : undefined })),
+        };
+      }
+      try { await ctx.fs.writeJSON(HISTORY_FILE, { conversations: out }); }
+      catch (err) { ctx.ui.log(`mesh: historique non enregistré (${err.message})`, 'error'); }
+    }
+
+    async function loadHistory() {
+      let data;
+      try { data = await ctx.fs.readJSON(HISTORY_FILE); }
+      catch (err) {
+        if (err && err.name === 'NotFoundError') return; // première fois : rien à charger, pas une erreur
+        historyLoadError = err;
+        ctx.ui.log(`mesh: historique illisible (${err.message}) — enregistrement désactivé`, 'error');
+        return;
+      }
+      const convs = data && typeof data === 'object' ? data.conversations : null;
+      if (!convs || typeof convs !== 'object') return;
+      for (const raw of Object.values(convs)) {
+        if (!raw || typeof raw !== 'object') continue;
+        const kind = raw.kind === 'grp' ? 'grp' : 'dm';
+        const id = String(raw.id || '').slice(0, 64);
+        if (!id) continue;
+        const conv = getOrCreateConv(kind, id, typeof raw.name === 'string' ? raw.name.slice(0, 60) : id);
+        conv.messages = Array.isArray(raw.messages) ? raw.messages.slice(-MAX_HISTORY_PER_CONV) : [];
+      }
+    }
+
+    function renderConvList() {
+      convList.innerHTML = '';
+      const dms = [...conversations.values()].filter((c) => c.kind === 'dm');
+      const grps = [...conversations.values()].filter((c) => c.kind === 'grp');
+      if (!dms.length && !grps.length) { convList.append(el('div', 'empty', t('mesh.emptyConvList'))); return; }
+      const section = (label, list) => {
+        if (!list.length) return;
+        const box = el('div', 'convgroup');
+        box.append(el('div', 'clabel', label));
+        for (const conv of list) box.append(renderConvItem(conv));
+        convList.append(box);
+      };
+      section(t('mesh.dmSection'), dms);
+      section(t('mesh.groupSection'), grps);
+    }
+
+    function renderConvItem(conv) {
+      const key = convKeyFor(conv.kind, conv.id);
+      const row = el('div', 'convitem' + (activeConvKey === key ? ' active' : ''));
+      const online = conv.kind === 'dm' ? conns.has(conv.id) : membersOf(conv.id).some((id) => conns.has(id));
+      row.append(el('span', 'cdot' + (online ? ' on' : '')));
+      row.append(el('span', 'cname', conv.name));
+      if (conv.unread > 0) row.append(el('span', 'badge', String(conv.unread > 99 ? '99+' : conv.unread)));
+      row.onclick = () => openConversation(key);
+      return row;
+    }
+
+    function renderChatPlaceholder() {
+      chat.innerHTML = '';
+      convHead.innerHTML = '';
+      chat.append(el('div', 'empty', t('mesh.noConv')));
+      msgIn.disabled = true; sendBtn.disabled = true;
+    }
+
+    /** En-tête de la conversation active : nom, statut, actions contextuelles. */
+    function refreshConvHead() {
+      if (!activeConvKey) return;
+      const conv = conversations.get(activeConvKey);
+      if (!conv) { renderChatPlaceholder(); return; }
+      convHead.innerHTML = '';
+      convHead.append(el('h3', null, conv.name));
+      if (conv.kind === 'dm') {
+        const online = conns.has(conv.id);
+        convHead.append(el('span', 'chint', online ? t('mesh.dmOnline') : t('mesh.dmOffline')));
+        const inviteWrap = el('span');
+        const sel = document.createElement('select');
+        for (const code of myGroupCodes()) {
+          const o = document.createElement('option'); o.value = code; o.textContent = groupName(code); sel.append(o);
+        }
+        if (myGroupCodes().length && online) {
+          const go = el('button', 'mini', t('mesh.inviteBtn'));
+          go.onclick = () => {
+            try { conns.get(conv.id).send({ type: 'invite', group: sel.value, name: groupName(sel.value), from: cfg.myId }); } catch (err) { ctx.ui.log(`mesh: invitation échouée (${err.message})`); }
+            try { ctx.ui.toast(t('mesh.inviteSent', { peer: conv.id })); } catch { /* noop */ }
+          };
+          inviteWrap.append(sel, go);
+          convHead.append(inviteWrap);
+        }
+        if (online) {
+          const disc = el('button', 'mini del', t('mesh.disconnect'));
+          disc.onclick = () => { try { conns.get(conv.id).close(); } catch { /* noop */ } removePeerEverywhere(conv.id); };
+          convHead.append(disc);
+        }
+      } else {
+        const connected = membersOf(conv.id).filter((id) => conns.has(id));
+        convHead.append(el('span', 'chint', t('mesh.groupMembersN', { n: connected.length + 1 })));
+        const missing = missingMembers(conv.id);
+        if (missing.length) {
+          const link = el('button', 'mini', t('mesh.groupConnectMissing', { n: missing.length }));
+          link.onclick = () => { for (const m of missingMembers(conv.id)) void dialPeer(m, conv.id); };
+          convHead.append(link);
+        }
+        const copy = el('button', 'mini', t('mesh.copyCode'));
+        copy.onclick = async () => {
+          try { await navigator.clipboard.writeText(conv.id); ctx.ui.toast(t('mesh.codeCopied')); }
+          catch { ctx.ui.toast(conv.id); }
+        };
+        convHead.append(copy);
+        const quit = el('button', 'mini del', t('mesh.groupQuit'));
+        quit.onclick = async () => { await quitGroup(conv.id); };
+        convHead.append(quit);
+      }
+      const canSend = currentTargets().length > 0;
+      msgIn.disabled = !canSend; sendBtn.disabled = !canSend;
+    }
+
+    function renderOneMessage(m) {
+      const mine = !!m.mine;
+      if (m.kind === 'file') {
+        const box = el('div', 'msg file' + (mine ? ' me' : ''));
+        const who0 = mine ? t('mesh.meArrow') : t('mesh.peerArrowMe', { from: m.from });
+        box.append(el('div', 'meta', t('mesh.fileMeta', { who: who0, name: m.name, size: (m.size / 1024).toFixed(1), unit: t('mesh.unitKo') })));
+        if (m.blobUrl) {
+          const a = document.createElement('a');
+          a.href = m.blobUrl; a.download = m.name; a.textContent = t('mesh.download'); a.className = 'mini';
+          a.onclick = () => { setTimeout(() => { try { URL.revokeObjectURL(m.blobUrl); } catch { /* noop */ } blobUrls.delete(m.blobUrl); }, 5000); };
+          box.append(a);
+        } else if (m.expired) {
+          box.append(el('span', 'hint', t('mesh.fileExpired')));
+        }
+        return box;
+      }
+      const box = el('div', 'msg' + (mine ? ' me' : ''));
+      box.append(el('div', 'meta', mine ? t('mesh.me') : m.from), el('div', null, m.text));
+      return box;
+    }
+
+    function renderActiveMessages() {
+      const conv = conversations.get(activeConvKey);
+      chat.innerHTML = '';
+      for (const m of conv.messages) chat.append(renderOneMessage(m));
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    function openConversation(key) {
+      const conv = conversations.get(key);
+      if (!conv) return;
+      activeConvKey = key;
+      conv.unread = 0;
+      renderActiveMessages();
+      refreshConvHead();
+      renderConvList();
+    }
+
+    /** Ajoute un message à une conversation (créée au besoin), persiste,
+     *  affiche si active sinon incrémente le badge non-lu. */
+    function pushMessage(kind, id, name, msg) {
+      const key = convKeyFor(kind, id);
+      const isNew = !conversations.has(key);
+      const conv = getOrCreateConv(kind, id, name);
+      conv.messages.push(msg);
+      if (conv.messages.length > MAX_HISTORY_PER_CONV) {
+        const dropped = conv.messages.shift();
+        if (dropped && dropped.blobUrl) { try { URL.revokeObjectURL(dropped.blobUrl); } catch { /* noop */ } blobUrls.delete(dropped.blobUrl); }
+      }
+      void saveHistory();
+      if (activeConvKey === key) {
+        chat.append(renderOneMessage(msg));
+        chat.scrollTop = chat.scrollHeight;
+      } else if (!msg.mine) {
+        conv.unread++;
+      }
+      if (isNew || activeConvKey === key) refreshConvHead();
+      renderConvList();
+    }
+
+    /** Cibles d'envoi pour la conversation active — plus de "Tous les
+     *  connectés" : comme sur Discord, on parle à une personne ou un salon. */
+    function currentTargets() {
+      if (!activeConvKey) return [];
+      const conv = conversations.get(activeConvKey);
+      if (!conv) return [];
+      if (conv.kind === 'dm') {
+        const conn = conns.get(conv.id);
+        return conn ? [{ conn, group: null }] : [];
+      }
+      const out = [];
+      for (const id of membersOf(conv.id)) {
+        const conn = conns.get(id);
+        if (conn) out.push({ conn, group: conv.id });
+      }
+      return out;
+    }
+
+    /** Route un message texte/fichier reçu (ou confirmé envoyé) vers la
+     *  bonne conversation, DM ou salon selon groupCode. */
+    function recordTextMessage(mine, peerId, groupCode, text) {
+      const kind = groupCode ? 'grp' : 'dm';
+      const id = groupCode || peerId;
+      pushMessage(kind, id, groupCode ? groupName(groupCode) : peerId, { mine, from: mine ? cfg.myId : peerId, kind: 'text', text });
+    }
+    function recordFileMessage(mine, peerId, groupCode, name, size, blobUrl) {
+      const kind = groupCode ? 'grp' : 'dm';
+      const id = groupCode || peerId;
+      pushMessage(kind, id, groupCode ? groupName(groupCode) : peerId, { mine, from: mine ? cfg.myId : peerId, kind: 'file', name, size, blobUrl: blobUrl || null });
     }
 
     function renderGroups() {
       gList.innerHTML = '';
       const codes = myGroupCodes();
       if (!codes.length) { gList.append(el('div', 'empty', t('mesh.groupEmpty'))); }
+
       for (const code of codes) {
         const item = el('div', 'gitem');
         const top = el('div', 'gtop');
@@ -411,8 +623,7 @@ const USBosApp = {
         item.append(acts);
         gList.append(item);
       }
-      renderGroupSel();
-      renderScope();
+      renderJoinGroupSel();
     }
 
     function renderInvites() {
@@ -432,6 +643,8 @@ const USBosApp = {
           try { ctx.ui.toast(t('mesh.inviteAccepted', { name: groupName(inv.group) })); } catch { /* noop */ }
           ctx.ui.log(`mesh: salon rejoint (${inv.group})`);
           renderInvites(); renderGroups();
+          getOrCreateConv('grp', inv.group, groupName(inv.group));
+          renderConvList();
         };
         const no = el('button', 'mini del', t('mesh.refuse'));
         no.onclick = () => { invites.delete(key); renderInvites(); };
@@ -729,7 +942,7 @@ const USBosApp = {
       const purge = setTimeout(() => { doneAcks.delete(st.id); doneAckTimers.delete(purge); }, 60000);
       doneAckTimers.add(purge);
       if (doneAcks.size > 20) { const k = doneAcks.keys().next().value; doneAcks.delete(k); }
-      appendFileMsg(st.name, st.size, false, st.from, url, st.group);
+      recordFileMessage(false, st.from, st.group, st.name, st.size, url);
       ctx.ui.log(`mesh: reçu ${st.name} (${st.n} morceaux)`);
     }
 
@@ -748,7 +961,8 @@ const USBosApp = {
       }
     }
 
-    async function quitGroup(code) {      const name = groupName(code);
+    async function quitGroup(code) {
+      const name = groupName(code);
       const bye = { type: 'bye', group: code, from: cfg.myId };
       for (const id of membersOf(code)) {
         const conn = conns.get(id);
@@ -760,61 +974,13 @@ const USBosApp = {
       try { ctx.ui.toast(t('mesh.groupLeft', { name })); } catch { /* noop */ }
       ctx.ui.log(`mesh: salon quitté (${code})`);
       renderGroups();
-    }
-
-    function updateSendEnabled() {
-      const on = conns.size > 0;
-      msgIn.disabled = !on; sendBtn.disabled = !on; scopeSel.disabled = !on;
-    }
-
-    function trimChat() {
-      while (chat.children.length > MAX_CHAT_MSGS) {
-        const old = chat.firstChild;
-        try {
-          const a = old && old.querySelector ? old.querySelector('a[href^="blob:"]') : null;
-          if (a) { try { URL.revokeObjectURL(a.href); } catch { /* noop */ } blobUrls.delete(a.href); }
-        } catch { /* noop */ }
-        try { old.remove(); } catch { chat.removeChild(chat.firstChild); }
-      }
-    }
-
-    function appendMsg(text, mine, fromId, groupCode) {
-      const m = el('div', 'msg' + (mine ? ' me' : ''));
-      let meta;
-      if (groupCode) {
-        const who = mine ? t('mesh.me') : fromId;
-        meta = el('div', 'meta', t('mesh.msgGroupMeta', { group: groupName(groupCode), who }));
-      } else {
-        meta = el('div', 'meta', mine ? t('mesh.me') : fromId);
-      }
-      const body = el('div', null, text);
-      m.append(meta, body);
-      chat.append(m);
-      trimChat();
-      chat.scrollTop = chat.scrollHeight;
-    }
-
-    function appendFileMsg(name, size, mine, fromId, blobUrl, groupCode) {
-      const m = el('div', 'msg file' + (mine ? ' me' : ''));
-      const who0 = mine ? t('mesh.meArrow') : t('mesh.peerArrowMe', { from: fromId });
-      const who = groupCode ? t('mesh.msgGroupMeta', { group: groupName(groupCode), who: who0 }) : who0;
-      const meta = el('div', 'meta', t('mesh.fileMeta', { who, name, size: (size / 1024).toFixed(1), unit: t('mesh.unitKo') }));
-      m.append(meta);
-      if (blobUrl) {
-        const a = document.createElement('a');
-        a.href = blobUrl; a.download = name; a.textContent = t('mesh.download'); a.className = 'mini';
-        a.onclick = () => { setTimeout(() => { try { URL.revokeObjectURL(blobUrl); } catch { /* noop */ } blobUrls.delete(blobUrl); }, 5000); };
-        m.append(a);
-      }
-      chat.append(m);
-      trimChat();
-      chat.scrollTop = chat.scrollHeight;
+      removeConv('grp', code);
     }
 
     const pendingIncoming = new Map(); // peerId -> { conn, timer }
     const PENDING_TIMEOUT_MS = 60000;
     const pendingBox = el('div', 'peers');
-    wrap.insertBefore(pendingBox, chat);
+    wrap.insertBefore(pendingBox, meshBody);
 
     function pendingContext(peerId) {
       // Contexte salon si le hello est déjà arrivé (file pré-acceptation).
@@ -928,7 +1094,7 @@ const USBosApp = {
           if (tr.peers.size === 0) {
             tr.row.done();
             sendTransfers.delete(tr.id);
-            appendFileMsg(tr.name, tr.size, true, null, null, tr.group);
+            recordFileMessage(true, conn.peer, tr.group, tr.name, tr.size, null);
             ctx.ui.log(`mesh: envoi terminé (${tr.name})`);
           }
         }
@@ -946,7 +1112,7 @@ const USBosApp = {
       // hors du salon — y injecter des messages en settant `group`.
       const g = payload.group != null ? String(payload.group) : null;
       if (g && !groupAllowed(g, conn.peer)) return;
-      if (payload.type === 'text') appendMsg(String(payload.text).slice(0, 4000), false, conn.peer, g);
+      if (payload.type === 'text') recordTextMessage(false, conn.peer, g, String(payload.text).slice(0, 4000));
       else if (payload.type === 'file') {
         // La taille est MESURÉE sur les octets reçus, pas lue dans l'en-tête :
         // un pair déclarait `size: 1` et-streamait 200 Mo, alloués d'un bloc.
@@ -958,7 +1124,7 @@ const USBosApp = {
         }
         const url = URL.createObjectURL(blob);
         blobUrls.add(url);
-        appendFileMsg(String(payload.name || 'file').slice(0, 255), blob.size, false, conn.peer, url, g);
+        recordFileMessage(false, conn.peer, g, String(payload.name || 'file').slice(0, 255), blob.size, url);
       }
     }
 
@@ -975,7 +1141,8 @@ const USBosApp = {
       // Rejoue ce qui est arrivé avant l'acceptation (hello précoce…).
       const queued = earlyQueue.get(conn.peer);
       earlyQueue.delete(conn.peer);
-      renderPeers(); updateSendEnabled();
+      getOrCreateConv('dm', conn.peer, conn.peer); // apparaît dans la barre latérale dès la connexion
+      renderConvList(); refreshConvHead();
       for (const p of (queued ? queued.items : [])) { try { handlePayload(conn, p); } catch { /* noop */ } }
       ctx.ui.log(`mesh: connexion acceptée (${conn.peer})`);
     }
@@ -1151,7 +1318,7 @@ const USBosApp = {
         ctx.ui.log(`mesh: salon ${target.slice(0, 32)} — compose le code d'un membre + choisis le salon`);
         return;
       }
-      const wantJoin = groupSel.value || null;
+      const wantJoin = joinGroupSel.value || null;
       if (await dialPeer(target, wantJoin)) connectIn.value = '';
     };
 
@@ -1169,58 +1336,44 @@ const USBosApp = {
       try { ctx.ui.toast(t('mesh.groupCreated', { name, code })); } catch { /* noop */ }
       ctx.ui.log(`mesh: salon créé (${code})`);
       renderGroups();
+      getOrCreateConv('grp', code, name);
+      renderConvList();
     };
-
-    function scopeTargets() {
-      const scope = scopeSel.value;
-      if (!scope || scope === 'all') return [...conns.values()];
-      // Tagué salon : uniquement les pairs membres (pas de fuite 1:1).
-      const out = [];
-      for (const id of membersOf(scope)) {
-        const conn = conns.get(id);
-        if (conn) out.push({ conn, group: scope });
-      }
-      return out;
-    }
 
     /** Cibles d'envoi normalisées {conn, group} — la projection
      *  `.map((e) => e.conn ? e : {conn: e, group: null})` était dupliquée
      *  (et son `group` calculé n'était jamais lu : les deux appelants
      *  utilisaient la variable `group` extérieure). */
-    function resolveTargets() {
-      return scopeTargets().map((e) => (e.conn ? { conn: e.conn, group: e.group } : { conn: e, group: null }));
-    }
-
     sendBtn.onclick = () => {
       const text = msgIn.value.trim().slice(0, 4000);
-      if (!text || conns.size === 0) return;
-      const scope = scopeSel.value;
-      const group = scope && scope !== 'all' ? scope : null;
-      const targets = resolveTargets();
+      if (!text || !activeConvKey) return;
+      const conv = conversations.get(activeConvKey);
+      const targets = currentTargets();
       if (!targets.length) {
-        try { ctx.ui.toast(t('mesh.noTargets')); } catch { /* noop */ }
+        try { ctx.ui.toast(conv.kind === 'dm' ? t('mesh.noTargetsDm', { peer: conv.id }) : t('mesh.noTargetsGroup', { name: conv.name })); } catch { /* noop */ }
         return;
       }
+      const group = conv.kind === 'grp' ? conv.id : null;
       for (const { conn } of targets) {
         try { conn.send({ type: 'text', text, group, from: cfg.myId }); } catch (err) { ctx.ui.log(`mesh: envoi échoué (${err.message})`); }
       }
-      appendMsg(text, true, null, group);
+      pushMessage(conv.kind, conv.id, conv.name, { mine: true, from: cfg.myId, kind: 'text', text });
       msgIn.value = '';
     };
     msgIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') sendBtn.click(); });
 
     async function sendFile(file) {
-      if (conns.size === 0) return;
+      if (!activeConvKey) return;
+      const conv = conversations.get(activeConvKey);
       if (file.size > MAX_PACK_BYTES) {
         ctx.ui.log(`mesh: fichier trop volumineux (${(file.size / 1048576).toFixed(1)} Mo > 256 Mo) — utilisez Partage/`);
         try { ctx.ui.toast(t('mesh.packTooBig')); } catch { /* noop */ }
         return;
       }
-      const scope = scopeSel.value;
-      const group = scope && scope !== 'all' ? scope : null;
-      const targets = resolveTargets();
+      const group = conv.kind === 'grp' ? conv.id : null;
+      const targets = currentTargets();
       if (!targets.length) {
-        try { ctx.ui.toast(t('mesh.noTargets')); } catch { /* noop */ }
+        try { ctx.ui.toast(conv.kind === 'dm' ? t('mesh.noTargetsDm', { peer: conv.id }) : t('mesh.noTargetsGroup', { name: conv.name })); } catch { /* noop */ }
         return;
       }
       // Plafond de diffusion : un salon peut annoncer 50 membres, et un clic
@@ -1264,7 +1417,7 @@ const USBosApp = {
           ctx.ui.log(`mesh: envoi fichier échoué (${err.message})`);
         }
       }
-      appendFileMsg(file.name, file.size, true, null, null, group);
+      pushMessage(conv.kind, conv.id, conv.name, { mine: true, from: cfg.myId, kind: 'file', name: file.name, size: file.size, blobUrl: null });
     }
 
     drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('drag'); });
@@ -1275,11 +1428,23 @@ const USBosApp = {
       if (file) await sendFile(file);
     });
 
+    clearChatBtn.onclick = () => {
+      if (!activeConvKey) return;
+      const conv = conversations.get(activeConvKey);
+      for (const m of conv.messages) if (m.blobUrl) { try { URL.revokeObjectURL(m.blobUrl); } catch { /* noop */ } blobUrls.delete(m.blobUrl); }
+      conv.messages = [];
+      chat.innerHTML = '';
+      void saveHistory();
+    };
+
     // Connexion "passive" ouverte dès l'entrée dans l'app pour être joignable.
     // ensurePeer() rejette si l'app se ferme pendant l'ouverture : c'est
     // attendu, pas une panne (l'appelant n'attend pas).
     ensurePeer().catch(() => { /* attendu si l'app se ferme ; sinon setStatus */ });
-    renderPeers(); renderGroups(); renderPending(); renderInvites(); updateSendEnabled();
+    await loadHistory();
+    for (const code of myGroupCodes()) getOrCreateConv('grp', code, groupName(code));
+    renderGroups(); renderConvList(); renderPending(); renderInvites();
+    if (activeConvKey && conversations.has(activeConvKey)) openConversation(activeConvKey); else renderChatPlaceholder();
 
     // Nettoyage TOTAL (le contrat l'exige) : Map ET timers compris.
     // peerCaps et doneAckTimers étaient omis -> les Map continuaient de

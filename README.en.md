@@ -70,7 +70,7 @@ Next to `USBos/`, the installer creates a **`Shared/`** folder (shown in French 
 | 🔐 **Vault** | Credential manager (username/password), protected by its own passphrase on top of the general encryption |
 | 🖼️ **Gallery** | Storage and viewing of images and videos |
 | 📝 **Markdown** | Document writing with preview, `.md` export/import |
-| 📡 **Mesh** | Direct chat and file transfer between two USBos drives, peer-to-peer (WebRTC) — no file ever passes through a central server |
+| 📡 **Mesh** | Peer-to-peer chat and file transfer (WebRTC), with Discord-style direct messages and group rooms — persisted history, no file ever passes through a central server |
 | 🗒️ **Notes** | Quick notes with title and content, built-in search |
 | 🧰 **Toolbox** | Small utilities (copy, conversions…) |
 
